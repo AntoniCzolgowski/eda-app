@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDA Insights | Automated Data Analysis</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Upload Screen -->
+    <div id="upload-screen" class="screen active">
+        <div class="upload-container">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                    </svg>
+                </div>
+                <h1>EDA <span>Insights</span></h1>
+                <p class="tagline">Automated Exploratory Data Analysis</p>
+            </div>
+
+            <div class="upload-zones">
+                <div class="upload-zone primary" id="csv-zone">
+                    <div class="zone-content">
+                        <div class="zone-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <path d="M9 12h6m-3-3v6m-7 4h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                            </svg>
+                        </div>
+                        <div class="zone-text">
+                            <strong>Drop CSV file here</strong>
+                            <span>or click to browse</span>
+                        </div>
+                        <div class="zone-filename" id="csv-filename"></div>
+                    </div>
+                    <input type="file" id="csv-input" accept=".csv" hidden>
+                </div>
+
+                <div class="upload-zone secondary" id="schema-zone">
+                    <div class="zone-content">
+                        <div class="zone-icon small">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            </svg>
+                        </div>
+                        <div class="zone-text">
+                            <strong>Schema (optional)</strong>
+                            <span>CSV or TXT with column descriptions</span>
+                        </div>
+                        <div class="zone-filename" id="schema-filename"></div>
+                    </div>
+                    <input type="file" id="schema-input" accept=".csv,.txt" hidden>
+                </div>
+            </div>
+
+            <button id="analyze-btn" class="analyze-btn" disabled>
+                <span class="btn-text">Analyze Dataset</span>
+                <span class="btn-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+                    </svg>
+                </span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Loading Screen -->
+    <div id="loading-screen" class="screen">
+        <div class="loading-container">
+            <div class="loading-animation">
+                <div class="pulse-ring"></div>
+                <div class="pulse-ring"></div>
+                <div class="pulse-ring"></div>
+                <div class="loading-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                    </svg>
+                </div>
+            </div>
+            <h2>Analyzing Your Data</h2>
+            <p id="loading-status">Parsing CSV file...</p>
+            <div class="progress-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
+            <span class="progress-text" id="progress-text">0%</span>
+        </div>
+    </div>
+
+    <!-- Results Screen -->
+    <div id="results-screen" class="screen">
+        <header class="results-header">
+            <div class="header-left">
+                <button id="back-btn" class="icon-btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                    </svg>
+                </button>
+                <div class="dataset-info">
+                    <h1 id="dataset-name">Dataset</h1>
+                    <div class="dataset-stats">
+                        <span id="row-count">0 rows</span>
+                        <span class="divider">•</span>
+                        <span id="col-count">0 columns</span>
+                    </div>
+                </div>
+            </div>
+            <div class="header-right">
+                <span class="badge success">Analysis Complete</span>
+            </div>
+        </header>
+
+        <div class="results-content">
+            <!-- Left Panel - Insights -->
+            <aside class="left-panel">
+                <section class="panel-section summary-section">
+                    <h3>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        Dataset Summary
+                    </h3>
+                    <p id="summary-text" class="summary-text">Loading summary...</p>
+                </section>
+
+                <section class="panel-section insights-section">
+                    <h3>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                        </svg>
+                        Key Insights
+                    </h3>
+                    <ul id="insights-list" class="insights-list"></ul>
+                </section>
+
+                <section class="panel-section limitations-section">
+                    <h3>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                        </svg>
+                        Limitations
+                    </h3>
+                    <ul id="limitations-list" class="limitations-list"></ul>
+                </section>
+            </aside>
+
+            <!-- Right Panel - Tabs -->
+            <main class="right-panel">
+                <nav class="tabs-nav">
+                    <button class="tab-btn active" data-tab="data">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                        </svg>
+                        Data
+                    </button>
+                    <button class="tab-btn" data-tab="columns">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+                        </svg>
+                        Columns
+                    </button>
+                    <button class="tab-btn" data-tab="plots">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                        </svg>
+                        Plots
+                    </button>
+                    <button class="tab-btn" data-tab="custom">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                        Custom
+                    </button>
+                </nav>
+
+                <div class="tab-content">
+                    <!-- Data Tab -->
+                    <div id="data-tab" class="tab-pane active">
+                        <div class="data-table-container">
+                            <table id="data-table" class="data-table">
+                                <thead></thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                        <div class="table-info">
+                            <span>Showing first 100 rows</span>
+                        </div>
+                    </div>
+
+                    <!-- Columns Tab -->
+                    <div id="columns-tab" class="tab-pane">
+                        <div id="columns-grid" class="columns-grid"></div>
+                    </div>
+
+                    <!-- Plots Tab - Redesigned -->
+                    <div id="plots-tab" class="tab-pane">
+                        <div class="plots-intro">
+                            <p>Click on a column to view its visualizations</p>
+                        </div>
+                        <div id="plots-column-selector" class="plots-column-selector"></div>
+                        <div id="plots-display" class="plots-display"></div>
+                    </div>
+
+                    <!-- Custom Tab - New Plot Builder -->
+                    <div id="custom-tab" class="tab-pane">
+                        <div class="custom-builder">
+                            <div class="builder-sidebar">
+                                <div class="builder-section">
+                                    <h4>1. Select Columns</h4>
+                                    <div id="column-checkboxes" class="column-checkboxes"></div>
+                                </div>
+                                
+                                <div class="builder-section">
+                                    <h4>2. Choose Plot Type</h4>
+                                    <div id="plot-type-selector" class="plot-type-selector">
+                                        <div class="plot-type-group">
+                                            <span class="group-label">Single Variable</span>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="histogram">
+                                                <span class="option-content">
+                                                    <span class="option-icon">📊</span>
+                                                    <span class="option-name">Histogram</span>
+                                                </span>
+                                            </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="boxplot">
+                                                <span class="option-content">
+                                                    <span class="option-icon">📦</span>
+                                                    <span class="option-name">Box Plot</span>
+                                                </span>
+                                            </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="violin">
+                                                <span class="option-content">
+                                                    <span class="option-icon">🎻</span>
+                                                    <span class="option-name">Violin Plot</span>
+                                                </span>
+                                            </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="bar">
+                                                <span class="option-content">
+                                                    <span class="option-icon">📈</span>
+                                                    <span class="option-name">Bar Chart</span>
+                                                </span>
+                                            </label>
+                                        </div>
+                                        <div class="plot-type-group">
+                                            <span class="group-label">Two Variables</span>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="scatter">
+                                                <span class="option-content">
+                                                    <span class="option-icon">⚬</span>
+                                                    <span class="option-name">Scatter Plot</span>
+                                                </span>
+                                            </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="line">
+                                                <span class="option-content">
+                                                    <span class="option-icon">📉</span>
+                                                    <span class="option-name">Line Chart</span>
+                                                </span>
+                                            </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="grouped_bar">
+                                                <span class="option-content">
+                                                    <span class="option-icon">📊</span>
+                                                    <span class="option-name">Grouped Bar</span>
+                                                </span>
+                                            </label>
+                                        </div>
+                                        <div class="plot-type-group">
+                                            <span class="group-label">Three+ Variables</span>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="scatter_color">
+                                                <span class="option-content">
+                                                    <span class="option-icon">🎨</span>
+                                                    <span class="option-name">Colored Scatter</span>
+                                                </span>
+                                            </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="bubble">
+                                                <span class="option-content">
+                                                    <span class="option-icon">🫧</span>
+                                                    <span class="option-name">Bubble Chart</span>
+                                                </span>
+                                            </label>
+                                        </div>
+                                        <div class="plot-type-group">
+                                            <span class="group-label">Special</span>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="correlation">
+                                                <span class="option-content">
+                                                    <span class="option-icon">🔥</span>
+                                                    <span class="option-name">Correlation Matrix</span>
+                                                </span>
+                                            </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="pairplot">
+                                                <span class="option-content">
+                                                    <span class="option-icon">🔢</span>
+                                                    <span class="option-name">Pair Plot</span>
+                                                </span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="builder-actions">
+                                    <button id="llm-suggest-btn" class="secondary-btn">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                                        </svg>
+                                        AI Suggest
+                                    </button>
+                                    <button id="generate-custom-btn" class="primary-btn">
+                                        Generate Plot
+                                    </button>
+                                </div>
+                                
+                                <div id="ai-suggestion-box" class="ai-suggestion-box hidden">
+                                    <div class="suggestion-header">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                                        </svg>
+                                        AI Suggestion
+                                    </div>
+                                    <p id="ai-suggestion-text"></p>
+                                </div>
+                            </div>
+                            
+                            <div class="builder-preview">
+                                <div id="custom-plot-area" class="custom-plot-area">
+                                    <div class="plot-placeholder">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                                            <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                                        </svg>
+                                        <p>Select columns and plot type, then click Generate</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
