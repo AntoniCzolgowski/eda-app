@@ -1,10 +1,95 @@
 """
 LLM Service - Claude Haiku integration for data analysis insights
+Fixed JSON parsing with proper sanitization
 """
 import os
 import json
+import re
 from anthropic import Anthropic
 from typing import Any, Optional
+
+
+def sanitize_for_json(text: str) -> str:
+    """
+    Sanitize text to be safe for JSON embedding.
+    Removes or escapes control characters that break JSON parsing.
+    """
+    if not text:
+        return ""
+    
+    # Replace common problematic characters
+    # Remove null bytes
+    text = text.replace('\x00', '')
+    
+    # Replace tabs with spaces
+    text = text.replace('\t', '    ')
+    
+    # Normalize line endings to \n
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    
+    # Remove other control characters (except newline which we handle separately)
+    # Control chars are 0x00-0x1F except 0x0A (newline) and 0x0D (carriage return, already replaced)
+    control_chars = ''.join(chr(i) for i in range(32) if i not in (10,))
+    text = text.translate(str.maketrans('', '', control_chars))
+    
+    return text
+
+
+def extract_json_from_response(response_text: str) -> dict:
+    """
+    Robustly extract JSON from LLM response, handling various formats.
+    """
+    text = response_text.strip()
+    
+    # Remove markdown code blocks
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    
+    text = text.strip()
+    
+    # Try to find JSON object boundaries
+    start_idx = text.find('{')
+    end_idx = text.rfind('}')
+    
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        text = text[start_idx:end_idx + 1]
+    
+    # Sanitize the text
+    text = sanitize_for_json(text)
+    
+    # Try parsing
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        # Try fixing common issues
+        
+        # Fix unescaped newlines in string values
+        # This regex finds strings and escapes newlines within them
+        def escape_newlines_in_strings(match):
+            content = match.group(1)
+            content = content.replace('\n', '\\n')
+            return f'"{content}"'
+        
+        # Match strings (simplified - doesn't handle all edge cases but covers most)
+        fixed_text = re.sub(r'"([^"\\]*(?:\\.[^"\\]*)*)"', 
+                          lambda m: '"' + m.group(1).replace('\n', '\\n') + '"', 
+                          text)
+        
+        try:
+            return json.loads(fixed_text)
+        except json.JSONDecodeError:
+            pass
+        
+        # Last resort: try to extract key fields manually
+        print(f"JSON parse failed, attempting manual extraction. Error: {e}")
+        print(f"Response text (first 500 chars): {text[:500]}")
+        
+        # Return a minimal valid structure
+        raise ValueError(f"Could not parse JSON from LLM response: {e}")
 
 
 class LLMService:
@@ -26,7 +111,12 @@ class LLMService:
         if not self.client:
             return f"Text column containing varied textual data."
         
-        sample_text = "\n".join([f"- {str(v)[:150]}" for v in sample_values[:12]])
+        # Sanitize sample values
+        clean_samples = []
+        for v in sample_values[:12]:
+            clean_v = sanitize_for_json(str(v)[:150])
+            clean_samples.append(f"- {clean_v}")
+        sample_text = "\n".join(clean_samples)
         
         prompt = f"""Analyze this text column from a dataset and write a 2-3 sentence summary describing what kind of data it contains.
 
@@ -40,7 +130,7 @@ Write a brief, informative summary (2-3 sentences) describing:
 - The general content/theme
 - Any patterns you notice
 
-Respond with ONLY the summary text, no labels or prefixes."""
+Respond with ONLY the summary text, no labels or prefixes. Do not use any special characters or formatting."""
 
         try:
             response = self.client.messages.create(
@@ -49,7 +139,9 @@ Respond with ONLY the summary text, no labels or prefixes."""
                 messages=[{"role": "user", "content": prompt}]
             )
             
-            return response.content[0].text.strip()
+            result = response.content[0].text.strip()
+            # Sanitize the response
+            return sanitize_for_json(result)
             
         except Exception as e:
             print(f"Text summary error: {e}")
@@ -116,7 +208,9 @@ DATASET CHARACTERISTICS:
         
         schema_section = ""
         if schema_content:
-            schema_section = f"\n\nSCHEMA/DESCRIPTION PROVIDED BY USER:\n{schema_content}\n"
+            # Sanitize schema content
+            clean_schema = sanitize_for_json(schema_content[:2000])
+            schema_section = f"\n\nSCHEMA/DESCRIPTION PROVIDED BY USER:\n{clean_schema}\n"
         
         prompt = f"""You are an expert data analyst providing a comprehensive exploratory data analysis report. Analyze this dataset thoroughly:
 
@@ -130,34 +224,33 @@ DETAILED COLUMN INFORMATION:
 Provide your analysis in the following JSON format. Be COMPREHENSIVE and SPECIFIC:
 
 {{
-    "summary": "Write 2 full paragraphs (NOT bullet points, flowing prose):\\n\\nParagraph 1: Describe what this dataset contains - what kind of data is this? What does each record represent? What time period or context does it cover? What are the key variables and what do they measure? Explain the structure and scope of the data.\\n\\nParagraph 2: Describe the overall data quality and characteristics - how complete is the data? What are the notable distributions? Are there any interesting patterns visible in the basic statistics? What preprocessing might be needed? What is this data suitable for?",
+    "summary": "Write 2 full paragraphs of flowing prose. Paragraph 1: Describe what this dataset contains, what each record represents, key variables. Paragraph 2: Describe data quality, notable distributions, preprocessing needs. Use plain text only, no special formatting.",
     
     "insights": [
-        "INSIGHT 1: [Specific finding about data distribution] - Reference actual numbers, percentages, or statistics. Explain what this means practically.",
-        "INSIGHT 2: [Specific finding about relationships or patterns] - Connect multiple variables if relevant. Explain implications.",
-        "INSIGHT 3: [Data quality observation] - Be specific about which columns and what issues. Suggest remediation.",
-        "INSIGHT 4: [Outlier or anomaly finding] - Identify specific outliers with numbers. Explain potential causes.",
-        "INSIGHT 5: [Business/domain insight] - What does this data tell us about the underlying phenomenon?",
-        "INSIGHT 6: [Recommendation for analysis] - What specific analysis or modeling approach would be valuable?",
-        "INSIGHT 7: [Notable statistic or finding] - Highlight something surprising or important in the data."
+        "INSIGHT 1: Specific finding about data distribution with actual numbers",
+        "INSIGHT 2: Finding about relationships or patterns between variables",
+        "INSIGHT 3: Data quality observation with specific columns affected",
+        "INSIGHT 4: Outlier or anomaly finding with numbers",
+        "INSIGHT 5: Business or domain insight from the data",
+        "INSIGHT 6: Recommendation for analysis approach",
+        "INSIGHT 7: Notable statistic or surprising finding"
     ],
     
     "limitations": [
-        "LIMITATION 1: [Specific data quality issue] - Which columns affected, how severe, what's the impact on analysis?",
-        "LIMITATION 2: [Coverage or sampling limitation] - What's missing or potentially biased in this data?",
-        "LIMITATION 3: [What cannot be concluded] - What questions can this data NOT answer?"
+        "LIMITATION 1: Specific data quality issue and its impact",
+        "LIMITATION 2: Coverage or sampling limitation",
+        "LIMITATION 3: What questions this data cannot answer"
     ]
 }}
 
-IMPORTANT GUIDELINES:
-- The summary MUST be 2 substantial paragraphs of flowing prose (4-6 sentences each), NOT bullet points
-- Each insight MUST reference specific column names and actual statistics from the data
-- Insights should be ACTIONABLE - tell the analyst what to DO with this information
-- Be specific about numbers: "Age ranges from 0.17 to 80 with mean 29.5" not just "Age varies"
-- Connect findings to potential use cases (prediction, segmentation, etc.)
-- If you see patterns suggesting this is a well-known dataset (like Titanic), leverage that domain knowledge
+CRITICAL FORMATTING RULES:
+- Output ONLY valid JSON, no markdown, no code blocks
+- Use plain ASCII text only - no special characters, no unicode
+- Do not use actual newlines inside string values - write as continuous text
+- Each insight and limitation should be a single line of text
+- Keep text simple and avoid quotation marks within strings
 
-Respond ONLY with valid JSON, no other text."""
+Respond with the JSON object only."""
 
         try:
             response = self.client.messages.create(
@@ -168,25 +261,28 @@ Respond ONLY with valid JSON, no other text."""
             
             response_text = response.content[0].text.strip()
             
-            # Clean up response if needed
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.startswith("```"):
-                response_text = response_text[3:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
+            # Extract and parse JSON
+            result = extract_json_from_response(response_text)
             
-            result = json.loads(response_text.strip())
-            
-            # Ensure summary has proper line breaks for display
+            # Sanitize all string values in result
             if 'summary' in result:
-                result['summary'] = result['summary'].replace('\\n\\n', '\n\n').replace('\\n', '\n')
+                result['summary'] = sanitize_for_json(result['summary'])
+                # Add paragraph break for display
+                result['summary'] = result['summary'].replace('Paragraph 2:', '\n\n')
+            
+            if 'insights' in result:
+                result['insights'] = [sanitize_for_json(str(i)) for i in result['insights']]
+            
+            if 'limitations' in result:
+                result['limitations'] = [sanitize_for_json(str(l)) for l in result['limitations']]
             
             return result
             
         except json.JSONDecodeError as e:
             print(f"JSON parse error: {e}")
-            print(f"Response was: {response_text[:500]}")
+            return self._fallback_analysis(dataset_info, columns)
+        except ValueError as e:
+            print(f"Value error: {e}")
             return self._fallback_analysis(dataset_info, columns)
         except Exception as e:
             print(f"LLM error: {e}")
@@ -216,39 +312,24 @@ Respond ONLY with valid JSON, no other text."""
 
 Suggest which additional columns would create an interesting visualization. Also recommend the best plot type.
 
-Respond in JSON:
-{{
-    "plot_type": "histogram|boxplot|violin|bar|scatter|line|scatter_color|bubble|correlation",
-    "x_column": "{columns[0]['name']}",
-    "y_column": null,
-    "reasoning": "For this single column, I recommend [plot type]. To create more interesting visualizations, consider adding [suggest 2-3 column types that would pair well, e.g., 'a categorical column for grouping' or 'another numeric column for correlation analysis']."
-}}"""
+Respond in JSON only, no markdown:
+{{"plot_type": "histogram or boxplot or violin or bar", "x_column": "{columns[0]['name']}", "y_column": null, "reasoning": "Brief explanation"}}"""
         elif num_cols == 2:
             prompt = f"""The user selected 2 columns:
 {chr(10).join(col_details)}
 
 Suggest the best visualization for these two columns.
 
-Respond in JSON:
-{{
-    "plot_type": "scatter|line|grouped_bar|scatter_color",
-    "x_column": "first_column",
-    "y_column": "second_column",
-    "reasoning": "Brief explanation of why this plot type is best for these columns"
-}}"""
+Respond in JSON only, no markdown:
+{{"plot_type": "scatter or line or grouped_bar or heatmap_cat", "x_column": "first_column", "y_column": "second_column", "reasoning": "Brief explanation"}}"""
         else:
             prompt = f"""The user selected {num_cols} columns:
 {chr(10).join(col_details)}
 
 Suggest the best multi-variable visualization.
 
-Respond in JSON:
-{{
-    "plot_type": "scatter_color|bubble|correlation|pairplot",
-    "x_column": "column_for_x",
-    "y_column": "column_for_y", 
-    "reasoning": "Explanation of how to best visualize these multiple variables"
-}}"""
+Respond in JSON only, no markdown:
+{{"plot_type": "scatter_color or bubble or correlation or pairplot", "x_column": "column_for_x", "y_column": "column_for_y", "reasoning": "Brief explanation"}}"""
 
         try:
             response = self.client.messages.create(
@@ -258,15 +339,13 @@ Respond in JSON:
             )
             
             response_text = response.content[0].text.strip()
+            result = extract_json_from_response(response_text)
             
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.startswith("```"):
-                response_text = response_text[3:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
+            # Sanitize reasoning
+            if 'reasoning' in result:
+                result['reasoning'] = sanitize_for_json(result['reasoning'])
             
-            return json.loads(response_text.strip())
+            return result
             
         except Exception as e:
             print(f"Plot suggestion error: {e}")
@@ -378,6 +457,13 @@ Respond in JSON:
                     "x_column": cat_cols[0]['name'],
                     "y_column": numeric_cols[0]['name'],
                     "reasoning": f"A grouped bar chart shows average '{numeric_cols[0]['name']}' across categories of '{cat_cols[0]['name']}'."
+                }
+            elif len(cat_cols) == 2:
+                return {
+                    "plot_type": "heatmap_cat",
+                    "x_column": cat_cols[0]['name'],
+                    "y_column": cat_cols[1]['name'],
+                    "reasoning": f"A heatmap shows the frequency distribution across both categorical variables '{cat_cols[0]['name']}' and '{cat_cols[1]['name']}'."
                 }
         
         elif len(columns) >= 3:

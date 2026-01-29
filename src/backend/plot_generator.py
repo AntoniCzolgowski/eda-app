@@ -1,5 +1,6 @@
 """
 Plot Generator - Creates Plotly visualizations for data analysis
+Enhanced with aggregations, Y-axis scaling, categorical heatmaps, and fixed 3-var plots
 """
 import pandas as pd
 import numpy as np
@@ -28,6 +29,22 @@ class PlotGenerator:
     # Threshold for treating numeric as categorical
     LOW_CARDINALITY_THRESHOLD = 5
     
+    # Supported aggregation functions
+    AGGREGATIONS = {
+        'count': 'count',
+        'sum': 'sum',
+        'avg': 'mean',
+        'mean': 'mean',
+        'min': 'min',
+        'max': 'max',
+        'median': 'median',
+        'std': 'std',
+        'var': 'var',
+        'first': 'first',
+        'last': 'last',
+        'nunique': 'nunique'
+    }
+    
     def __init__(self):
         pass
     
@@ -35,6 +52,58 @@ class PlotGenerator:
         """Check if a numeric column has low cardinality"""
         unique_count = series.dropna().nunique()
         return unique_count <= self.LOW_CARDINALITY_THRESHOLD
+    
+    def _apply_aggregation(self, df: pd.DataFrame, group_cols: list, value_col: str, agg_func: str) -> pd.DataFrame:
+        """Apply aggregation function to grouped data"""
+        agg_method = self.AGGREGATIONS.get(agg_func, 'mean')
+        
+        if agg_func == 'count':
+            # Count doesn't need a value column
+            result = df.groupby(group_cols).size().reset_index(name='count')
+            return result
+        else:
+            # Ensure value column is numeric
+            df_copy = df.copy()
+            df_copy[value_col] = pd.to_numeric(df_copy[value_col], errors='coerce')
+            
+            result = df_copy.groupby(group_cols)[value_col].agg(agg_method).reset_index()
+            result.columns = list(group_cols) + [f'{agg_func}_{value_col}']
+            return result
+    
+    def _apply_y_axis_options(self, layout: dict, options: dict) -> dict:
+        """Apply Y-axis scaling and range options to layout"""
+        if not options:
+            return layout
+        
+        # Y-axis range
+        y_min = options.get('yRange', {}).get('min')
+        y_max = options.get('yRange', {}).get('max')
+        
+        if y_min is not None or y_max is not None:
+            if 'yaxis' not in layout:
+                layout['yaxis'] = {}
+            
+            current_range = layout['yaxis'].get('range', [None, None])
+            layout['yaxis']['range'] = [
+                y_min if y_min is not None else current_range[0],
+                y_max if y_max is not None else current_range[1]
+            ]
+        
+        # Y-axis tick interval
+        y_tick = options.get('yTick')
+        if y_tick:
+            if 'yaxis' not in layout:
+                layout['yaxis'] = {}
+            layout['yaxis']['dtick'] = y_tick
+        
+        # Scale type (linear/log)
+        scale_type = options.get('scaleType', 'linear')
+        if scale_type == 'log':
+            if 'yaxis' not in layout:
+                layout['yaxis'] = {}
+            layout['yaxis']['type'] = 'log'
+        
+        return layout
     
     def generate_auto_plots(self, df: pd.DataFrame, columns: list[dict]) -> dict[str, list]:
         """Generate automatic plots for all suitable columns"""
@@ -113,33 +182,46 @@ class PlotGenerator:
         
         # Extract options
         bin_count = options.get('binCount', 20)
+        agg_func = options.get('aggregation', None)
         
+        # Route to appropriate plot generator
         if plot_type == "histogram":
-            plot = self._create_histogram(df, x_column, bin_count)
+            plot = self._create_histogram(df, x_column, bin_count, options)
         elif plot_type == "boxplot":
-            plot = self._create_boxplot(df, x_column)
+            plot = self._create_boxplot(df, x_column, options)
         elif plot_type == "violin":
-            plot = self._create_violin(df, x_column)
+            plot = self._create_violin(df, x_column, options)
         elif plot_type == "bar":
-            plot = self._create_bar_chart(df, x_column)
+            plot = self._create_bar_chart(df, x_column, y_column, agg_func, options)
         elif plot_type == "scatter" and y_column:
-            plot = self._create_scatter(df, x_column, y_column)
-        elif plot_type == "scatter_color" and y_column and color_column:
-            plot = self._create_scatter_colored(df, x_column, y_column, color_column)
+            plot = self._create_scatter(df, x_column, y_column, options)
+        elif plot_type == "scatter_color" and y_column:
+            # Color column is optional for scatter_color
+            plot = self._create_scatter_colored(df, x_column, y_column, color_column, options)
         elif plot_type == "line" and y_column:
-            plot = self._create_line_chart(df, x_column, y_column)
+            plot = self._create_line_chart(df, x_column, y_column, agg_func, options)
         elif plot_type == "grouped_bar" and y_column:
-            plot = self._create_grouped_bar(df, x_column, y_column)
+            plot = self._create_grouped_bar(df, x_column, y_column, color_column, agg_func, options)
+        elif plot_type == "stacked_bar" and y_column:
+            plot = self._create_stacked_bar(df, x_column, y_column, color_column, agg_func, options)
         elif plot_type == "bubble" and columns and len(columns) >= 3:
-            plot = self._create_bubble_chart(df, columns[0], columns[1], columns[2])
+            plot = self._create_bubble_chart(df, columns[0], columns[1], columns[2], options)
+        elif plot_type == "heatmap_cat" and y_column:
+            # Heatmap for two categorical variables
+            plot = self._create_categorical_heatmap(df, x_column, y_column, agg_func, color_column, options)
         elif plot_type == "correlation":
             plot = self._create_correlation_matrix(df, columns)
         elif plot_type == "pairplot" and columns:
             plot = self._create_pairplot(df, columns[:4])  # Limit to 4 columns
         elif plot_type == "wordcloud":
             plot = self._create_wordcloud(df, x_column)
+        elif plot_type == "pie":
+            plot = self._create_pie_chart(df, x_column, y_column, agg_func, options)
+        elif plot_type == "box_grouped" and y_column:
+            plot = self._create_grouped_boxplot(df, x_column, y_column, color_column, options)
         else:
-            plot = self._create_histogram(df, x_column, bin_count)
+            # Default fallback
+            plot = self._create_histogram(df, x_column, bin_count, options)
         
         if plot is None:
             plot = {"data": [], "layout": {"title": "Could not generate plot"}}
@@ -153,7 +235,7 @@ class PlotGenerator:
             "plot_layout": plot.get("layout", {})
         }
     
-    def _create_histogram(self, df: pd.DataFrame, column: str, bin_count: int = 20) -> dict[str, Any]:
+    def _create_histogram(self, df: pd.DataFrame, column: str, bin_count: int = 20, options: dict = None) -> dict[str, Any]:
         """Create a histogram for numeric data"""
         try:
             data = pd.to_numeric(df[column], errors='coerce').dropna()
@@ -164,6 +246,17 @@ class PlotGenerator:
             # Use provided bin count or calculate optimal
             n_bins = min(bin_count, 100)
             
+            layout = {
+                "title": f"Distribution of {column}",
+                "xaxis": {"title": column},
+                "yaxis": {"title": "Frequency"},
+                "bargap": 0.05
+            }
+            
+            # Apply Y-axis options
+            if options:
+                layout = self._apply_y_axis_options(layout, options)
+            
             return {
                 "data": [{
                     "type": "histogram",
@@ -172,24 +265,27 @@ class PlotGenerator:
                     "marker": {"color": self.COLORS[0]},
                     "opacity": 0.8
                 }],
-                "layout": {
-                    "title": f"Distribution of {column}",
-                    "xaxis": {"title": column},
-                    "yaxis": {"title": "Frequency"},
-                    "bargap": 0.05
-                }
+                "layout": layout
             }
         except Exception as e:
             print(f"Histogram error for {column}: {e}")
             return None
     
-    def _create_boxplot(self, df: pd.DataFrame, column: str) -> dict[str, Any]:
+    def _create_boxplot(self, df: pd.DataFrame, column: str, options: dict = None) -> dict[str, Any]:
         """Create a boxplot for numeric data"""
         try:
             data = pd.to_numeric(df[column], errors='coerce').dropna()
             
             if len(data) == 0:
                 return None
+            
+            layout = {
+                "title": f"Boxplot of {column}",
+                "yaxis": {"title": column}
+            }
+            
+            if options:
+                layout = self._apply_y_axis_options(layout, options)
             
             return {
                 "data": [{
@@ -199,22 +295,67 @@ class PlotGenerator:
                     "marker": {"color": self.COLORS[1]},
                     "boxpoints": "outliers"
                 }],
-                "layout": {
-                    "title": f"Boxplot of {column}",
-                    "yaxis": {"title": column}
-                }
+                "layout": layout
             }
         except Exception as e:
             print(f"Boxplot error for {column}: {e}")
             return None
     
-    def _create_violin(self, df: pd.DataFrame, column: str) -> dict[str, Any]:
+    def _create_grouped_boxplot(self, df: pd.DataFrame, cat_col: str, num_col: str, color_col: str = None, options: dict = None) -> dict[str, Any]:
+        """Create boxplots grouped by categorical variable"""
+        try:
+            df_clean = df[[cat_col, num_col]].dropna()
+            df_clean[num_col] = pd.to_numeric(df_clean[num_col], errors='coerce')
+            df_clean = df_clean.dropna()
+            
+            if len(df_clean) == 0:
+                return None
+            
+            categories = df_clean[cat_col].unique()[:15]  # Limit categories
+            
+            traces = []
+            for i, cat in enumerate(categories):
+                cat_data = df_clean[df_clean[cat_col] == cat][num_col]
+                traces.append({
+                    "type": "box",
+                    "y": cat_data.tolist(),
+                    "name": str(cat),
+                    "marker": {"color": self.COLORS[i % len(self.COLORS)]},
+                    "boxpoints": "outliers"
+                })
+            
+            layout = {
+                "title": f"Distribution of {num_col} by {cat_col}",
+                "yaxis": {"title": num_col},
+                "xaxis": {"title": cat_col}
+            }
+            
+            if options:
+                layout = self._apply_y_axis_options(layout, options)
+            
+            return {
+                "data": traces,
+                "layout": layout
+            }
+        except Exception as e:
+            print(f"Grouped boxplot error: {e}")
+            return None
+    
+    def _create_violin(self, df: pd.DataFrame, column: str, options: dict = None) -> dict[str, Any]:
         """Create a violin plot for numeric data"""
         try:
             data = pd.to_numeric(df[column], errors='coerce').dropna()
             
             if len(data) == 0:
                 return None
+            
+            layout = {
+                "title": f"Violin Plot of {column}",
+                "yaxis": {"title": column}
+            }
+            
+            if options:
+                layout = self._apply_y_axis_options(layout, options)
             
             return {
                 "data": [{
@@ -227,41 +368,95 @@ class PlotGenerator:
                     "line": {"color": self.COLORS[0]},
                     "opacity": 0.7
                 }],
-                "layout": {
-                    "title": f"Violin Plot of {column}",
-                    "yaxis": {"title": column}
-                }
+                "layout": layout
             }
         except Exception as e:
             print(f"Violin error for {column}: {e}")
             return None
     
-    def _create_bar_chart(self, df: pd.DataFrame, column: str) -> dict[str, Any]:
-        """Create a bar chart for categorical data"""
+    def _create_bar_chart(self, df: pd.DataFrame, column: str, value_col: str = None, agg_func: str = None, options: dict = None) -> dict[str, Any]:
+        """Create a bar chart for categorical data with optional aggregation"""
         try:
-            value_counts = df[column].value_counts().head(15)
+            if value_col and agg_func:
+                # Aggregated bar chart
+                agg_data = self._apply_aggregation(df, [column], value_col, agg_func)
+                agg_col = agg_data.columns[-1]  # The aggregated column
+                
+                # Sort by aggregated value and limit
+                agg_data = agg_data.nlargest(15, agg_col)
+                
+                x_vals = [str(x) for x in agg_data[column].tolist()]
+                y_vals = agg_data[agg_col].tolist()
+                y_title = f"{agg_func.upper()}({value_col})"
+                title = f"{agg_func.upper()} of {value_col} by {column}"
+            else:
+                # Simple frequency count
+                value_counts = df[column].value_counts().head(15)
+                
+                if len(value_counts) == 0:
+                    return None
+                
+                x_vals = [str(x) for x in value_counts.index.tolist()]
+                y_vals = value_counts.values.tolist()
+                y_title = "Count"
+                title = f"Frequency of {column}"
             
-            if len(value_counts) == 0:
-                return None
+            layout = {
+                "title": title,
+                "xaxis": {"title": column, "tickangle": -45},
+                "yaxis": {"title": y_title}
+            }
+            
+            if options:
+                layout = self._apply_y_axis_options(layout, options)
             
             return {
                 "data": [{
                     "type": "bar",
-                    "x": [str(x) for x in value_counts.index.tolist()],
-                    "y": value_counts.values.tolist(),
+                    "x": x_vals,
+                    "y": y_vals,
                     "marker": {"color": self.COLORS[2]}
                 }],
-                "layout": {
-                    "title": f"Frequency of {column}",
-                    "xaxis": {"title": column, "tickangle": -45},
-                    "yaxis": {"title": "Count"}
-                }
+                "layout": layout
             }
         except Exception as e:
             print(f"Bar chart error for {column}: {e}")
             return None
     
-    def _create_scatter(self, df: pd.DataFrame, x_col: str, y_col: str) -> dict[str, Any]:
+    def _create_pie_chart(self, df: pd.DataFrame, column: str, value_col: str = None, agg_func: str = None, options: dict = None) -> dict[str, Any]:
+        """Create a pie chart for categorical data"""
+        try:
+            if value_col and agg_func:
+                agg_data = self._apply_aggregation(df, [column], value_col, agg_func)
+                agg_col = agg_data.columns[-1]
+                agg_data = agg_data.nlargest(10, agg_col)
+                
+                labels = [str(x) for x in agg_data[column].tolist()]
+                values = agg_data[agg_col].tolist()
+                title = f"{agg_func.upper()} of {value_col} by {column}"
+            else:
+                value_counts = df[column].value_counts().head(10)
+                labels = [str(x) for x in value_counts.index.tolist()]
+                values = value_counts.values.tolist()
+                title = f"Distribution of {column}"
+            
+            return {
+                "data": [{
+                    "type": "pie",
+                    "labels": labels,
+                    "values": values,
+                    "marker": {"colors": self.COLORS[:len(labels)]},
+                    "hole": 0.3
+                }],
+                "layout": {
+                    "title": title
+                }
+            }
+        except Exception as e:
+            print(f"Pie chart error: {e}")
+            return None
+    
+    def _create_scatter(self, df: pd.DataFrame, x_col: str, y_col: str, options: dict = None) -> dict[str, Any]:
         """Create a scatter plot for two numeric columns"""
         try:
             x_data = pd.to_numeric(df[x_col], errors='coerce')
@@ -274,6 +469,18 @@ class PlotGenerator:
             if len(x_clean) == 0:
                 return None
             
+            marker_size = options.get('markerSize', 8) if options else 8
+            opacity = options.get('opacity', 0.6) if options else 0.6
+            
+            layout = {
+                "title": f"{x_col} vs {y_col}",
+                "xaxis": {"title": x_col},
+                "yaxis": {"title": y_col}
+            }
+            
+            if options:
+                layout = self._apply_y_axis_options(layout, options)
+            
             return {
                 "data": [{
                     "type": "scatter",
@@ -282,34 +489,71 @@ class PlotGenerator:
                     "y": y_clean,
                     "marker": {
                         "color": self.COLORS[3],
-                        "size": 8,
-                        "opacity": 0.6
+                        "size": marker_size,
+                        "opacity": opacity
                     }
                 }],
-                "layout": {
-                    "title": f"{x_col} vs {y_col}",
-                    "xaxis": {"title": x_col},
-                    "yaxis": {"title": y_col}
-                }
+                "layout": layout
             }
         except Exception as e:
             print(f"Scatter plot error: {e}")
             return None
     
-    def _create_scatter_colored(self, df: pd.DataFrame, x_col: str, y_col: str, color_col: str) -> dict[str, Any]:
+    def _create_scatter_colored(self, df: pd.DataFrame, x_col: str, y_col: str, color_col: str = None, options: dict = None) -> dict[str, Any]:
         """Create a scatter plot with color by third variable"""
         try:
             x_data = pd.to_numeric(df[x_col], errors='coerce')
             y_data = pd.to_numeric(df[y_col], errors='coerce')
-            color_data = df[color_col]
             
             mask = ~(x_data.isna() | y_data.isna())
+            
+            marker_size = options.get('markerSize', 8) if options else 8
+            opacity = options.get('opacity', 0.7) if options else 0.7
+            
+            layout = {
+                "xaxis": {"title": x_col},
+                "yaxis": {"title": y_col}
+            }
+            
+            if options:
+                layout = self._apply_y_axis_options(layout, options)
+            
+            # If no color column, just return regular scatter
+            if not color_col or color_col not in df.columns:
+                layout["title"] = f"{x_col} vs {y_col}"
+                return {
+                    "data": [{
+                        "type": "scatter",
+                        "mode": "markers",
+                        "x": x_data[mask].tolist(),
+                        "y": y_data[mask].tolist(),
+                        "marker": {
+                            "color": self.COLORS[3],
+                            "size": marker_size,
+                            "opacity": opacity
+                        }
+                    }],
+                    "layout": layout
+                }
+            
+            color_data = df[color_col]
             
             # Check if color column is numeric or categorical
             is_numeric_color = pd.api.types.is_numeric_dtype(color_data)
             
+            # Also try to convert to numeric
+            if not is_numeric_color:
+                try:
+                    numeric_test = pd.to_numeric(color_data, errors='coerce')
+                    if numeric_test.notna().sum() / len(numeric_test) > 0.8:
+                        color_data = numeric_test
+                        is_numeric_color = True
+                except:
+                    pass
+            
             if is_numeric_color:
                 color_clean = pd.to_numeric(color_data, errors='coerce')[mask].tolist()
+                layout["title"] = f"{x_col} vs {y_col} (colored by {color_col})"
                 return {
                     "data": [{
                         "type": "scatter",
@@ -321,15 +565,11 @@ class PlotGenerator:
                             "colorscale": "Viridis",
                             "showscale": True,
                             "colorbar": {"title": color_col},
-                            "size": 8,
-                            "opacity": 0.7
+                            "size": marker_size,
+                            "opacity": opacity
                         }
                     }],
-                    "layout": {
-                        "title": f"{x_col} vs {y_col} (colored by {color_col})",
-                        "xaxis": {"title": x_col},
-                        "yaxis": {"title": y_col}
-                    }
+                    "layout": layout
                 }
             else:
                 # Categorical color
@@ -338,32 +578,30 @@ class PlotGenerator:
                 
                 for i, cat in enumerate(unique_colors):
                     cat_mask = (color_data == cat) & mask
-                    traces.append({
-                        "type": "scatter",
-                        "mode": "markers",
-                        "name": str(cat),
-                        "x": x_data[cat_mask].tolist(),
-                        "y": y_data[cat_mask].tolist(),
-                        "marker": {
-                            "color": self.COLORS[i % len(self.COLORS)],
-                            "size": 8,
-                            "opacity": 0.7
-                        }
-                    })
+                    if cat_mask.sum() > 0:
+                        traces.append({
+                            "type": "scatter",
+                            "mode": "markers",
+                            "name": str(cat),
+                            "x": x_data[cat_mask].tolist(),
+                            "y": y_data[cat_mask].tolist(),
+                            "marker": {
+                                "color": self.COLORS[i % len(self.COLORS)],
+                                "size": marker_size,
+                                "opacity": opacity
+                            }
+                        })
                 
+                layout["title"] = f"{x_col} vs {y_col} (by {color_col})"
                 return {
                     "data": traces,
-                    "layout": {
-                        "title": f"{x_col} vs {y_col} (by {color_col})",
-                        "xaxis": {"title": x_col},
-                        "yaxis": {"title": y_col}
-                    }
+                    "layout": layout
                 }
         except Exception as e:
             print(f"Colored scatter error: {e}")
             return None
     
-    def _create_bubble_chart(self, df: pd.DataFrame, x_col: str, y_col: str, size_col: str) -> dict[str, Any]:
+    def _create_bubble_chart(self, df: pd.DataFrame, x_col: str, y_col: str, size_col: str, options: dict = None) -> dict[str, Any]:
         """Create a bubble chart (scatter with size by 3rd variable)"""
         try:
             x_data = pd.to_numeric(df[x_col], errors='coerce')
@@ -372,9 +610,27 @@ class PlotGenerator:
             
             mask = ~(x_data.isna() | y_data.isna() | size_data.isna())
             
+            if mask.sum() == 0:
+                return None
+            
             # Normalize sizes
             sizes = size_data[mask]
-            size_normalized = ((sizes - sizes.min()) / (sizes.max() - sizes.min()) * 40 + 5).tolist()
+            size_range = sizes.max() - sizes.min()
+            if size_range > 0:
+                size_normalized = ((sizes - sizes.min()) / size_range * 40 + 5).tolist()
+            else:
+                size_normalized = [20] * len(sizes)
+            
+            opacity = options.get('opacity', 0.6) if options else 0.6
+            
+            layout = {
+                "title": f"Bubble Chart: {x_col} vs {y_col} (size: {size_col})",
+                "xaxis": {"title": x_col},
+                "yaxis": {"title": y_col}
+            }
+            
+            if options:
+                layout = self._apply_y_axis_options(layout, options)
             
             return {
                 "data": [{
@@ -385,69 +641,218 @@ class PlotGenerator:
                     "marker": {
                         "size": size_normalized,
                         "color": self.COLORS[5],
-                        "opacity": 0.6,
+                        "opacity": opacity,
                         "sizemode": "diameter"
                     },
                     "text": [f"{size_col}: {v:.2f}" for v in sizes.tolist()],
                     "hovertemplate": f"{x_col}: %{{x}}<br>{y_col}: %{{y}}<br>%{{text}}<extra></extra>"
                 }],
-                "layout": {
-                    "title": f"Bubble Chart: {x_col} vs {y_col} (size: {size_col})",
-                    "xaxis": {"title": x_col},
-                    "yaxis": {"title": y_col}
-                }
+                "layout": layout
             }
         except Exception as e:
             print(f"Bubble chart error: {e}")
             return None
     
-    def _create_grouped_bar(self, df: pd.DataFrame, cat_col: str, num_col: str) -> dict[str, Any]:
-        """Create a grouped bar chart"""
+    def _create_grouped_bar(self, df: pd.DataFrame, cat_col: str, num_col: str, group_col: str = None, agg_func: str = None, options: dict = None) -> dict[str, Any]:
+        """Create a grouped bar chart with optional secondary grouping"""
         try:
-            grouped = df.groupby(cat_col)[num_col].mean().head(15)
+            agg_method = agg_func if agg_func else 'mean'
             
-            if len(grouped) == 0:
-                return None
+            if group_col and group_col in df.columns:
+                # Two-level grouping
+                agg_data = self._apply_aggregation(df, [cat_col, group_col], num_col, agg_method)
+                agg_col = agg_data.columns[-1]
+                
+                traces = []
+                groups = agg_data[group_col].unique()[:10]
+                categories = agg_data[cat_col].unique()[:15]
+                
+                for i, grp in enumerate(groups):
+                    grp_data = agg_data[agg_data[group_col] == grp]
+                    # Ensure all categories are present
+                    y_vals = []
+                    for cat in categories:
+                        val = grp_data[grp_data[cat_col] == cat][agg_col].values
+                        y_vals.append(float(val[0]) if len(val) > 0 else 0)
+                    
+                    traces.append({
+                        "type": "bar",
+                        "name": str(grp),
+                        "x": [str(c) for c in categories],
+                        "y": y_vals,
+                        "marker": {"color": self.COLORS[i % len(self.COLORS)]}
+                    })
+                
+                title = f"{agg_method.upper()} of {num_col} by {cat_col} and {group_col}"
+            else:
+                # Single grouping
+                agg_data = self._apply_aggregation(df, [cat_col], num_col, agg_method)
+                agg_col = agg_data.columns[-1]
+                agg_data = agg_data.head(15)
+                
+                traces = [{
+                    "type": "bar",
+                    "x": [str(x) for x in agg_data[cat_col].tolist()],
+                    "y": agg_data[agg_col].tolist(),
+                    "marker": {"color": self.COLORS[4]}
+                }]
+                
+                title = f"{agg_method.upper()} of {num_col} by {cat_col}"
+            
+            layout = {
+                "title": title,
+                "xaxis": {"title": cat_col, "tickangle": -45},
+                "yaxis": {"title": f"{agg_method.upper()}({num_col})"},
+                "barmode": "group"
+            }
+            
+            if options:
+                layout = self._apply_y_axis_options(layout, options)
             
             return {
-                "data": [{
-                    "type": "bar",
-                    "x": [str(x) for x in grouped.index.tolist()],
-                    "y": grouped.values.tolist(),
-                    "marker": {"color": self.COLORS[4]}
-                }],
-                "layout": {
-                    "title": f"Average {num_col} by {cat_col}",
-                    "xaxis": {"title": cat_col, "tickangle": -45},
-                    "yaxis": {"title": f"Mean {num_col}"}
-                }
+                "data": traces,
+                "layout": layout
             }
         except Exception as e:
             print(f"Grouped bar error: {e}")
             return None
     
-    def _create_line_chart(self, df: pd.DataFrame, x_col: str, y_col: str) -> dict[str, Any]:
-        """Create a line chart"""
+    def _create_stacked_bar(self, df: pd.DataFrame, cat_col: str, num_col: str, stack_col: str = None, agg_func: str = None, options: dict = None) -> dict[str, Any]:
+        """Create a stacked bar chart"""
         try:
-            sorted_df = df[[x_col, y_col]].dropna().sort_values(x_col)
+            agg_method = agg_func if agg_func else 'sum'
             
-            if len(sorted_df) == 0:
-                return None
+            if stack_col and stack_col in df.columns:
+                agg_data = self._apply_aggregation(df, [cat_col, stack_col], num_col, agg_method)
+                agg_col = agg_data.columns[-1]
+                
+                traces = []
+                stacks = agg_data[stack_col].unique()[:10]
+                categories = agg_data[cat_col].unique()[:15]
+                
+                for i, stk in enumerate(stacks):
+                    stk_data = agg_data[agg_data[stack_col] == stk]
+                    y_vals = []
+                    for cat in categories:
+                        val = stk_data[stk_data[cat_col] == cat][agg_col].values
+                        y_vals.append(float(val[0]) if len(val) > 0 else 0)
+                    
+                    traces.append({
+                        "type": "bar",
+                        "name": str(stk),
+                        "x": [str(c) for c in categories],
+                        "y": y_vals,
+                        "marker": {"color": self.COLORS[i % len(self.COLORS)]}
+                    })
+                
+                title = f"Stacked {agg_method.upper()} of {num_col} by {cat_col}"
+            else:
+                return self._create_bar_chart(df, cat_col, num_col, agg_method, options)
+            
+            layout = {
+                "title": title,
+                "xaxis": {"title": cat_col, "tickangle": -45},
+                "yaxis": {"title": f"{agg_method.upper()}({num_col})"},
+                "barmode": "stack"
+            }
+            
+            if options:
+                layout = self._apply_y_axis_options(layout, options)
+            
+            return {
+                "data": traces,
+                "layout": layout
+            }
+        except Exception as e:
+            print(f"Stacked bar error: {e}")
+            return None
+    
+    def _create_categorical_heatmap(self, df: pd.DataFrame, x_col: str, y_col: str, agg_func: str = None, value_col: str = None, options: dict = None) -> dict[str, Any]:
+        """Create a heatmap for two categorical variables"""
+        try:
+            if value_col and agg_func and value_col in df.columns:
+                # Aggregated heatmap
+                pivot = df.pivot_table(
+                    index=y_col, 
+                    columns=x_col, 
+                    values=value_col, 
+                    aggfunc=self.AGGREGATIONS.get(agg_func, 'mean')
+                ).fillna(0)
+                title = f"{agg_func.upper()} of {value_col} by {x_col} and {y_col}"
+                colorbar_title = f"{agg_func}({value_col})"
+            else:
+                # Count heatmap
+                pivot = pd.crosstab(df[y_col], df[x_col])
+                title = f"Frequency Heatmap: {x_col} vs {y_col}"
+                colorbar_title = "Count"
+            
+            # Limit dimensions
+            pivot = pivot.iloc[:20, :20]
+            
+            return {
+                "data": [{
+                    "type": "heatmap",
+                    "z": pivot.values.tolist(),
+                    "x": [str(x) for x in pivot.columns.tolist()],
+                    "y": [str(y) for y in pivot.index.tolist()],
+                    "colorscale": "Blues",
+                    "text": [[f"{v:.2f}" if isinstance(v, float) else str(v) for v in row] for row in pivot.values],
+                    "texttemplate": "%{text}",
+                    "textfont": {"size": 10},
+                    "hoverongaps": False,
+                    "colorbar": {"title": colorbar_title}
+                }],
+                "layout": {
+                    "title": title,
+                    "xaxis": {"title": x_col, "tickangle": -45},
+                    "yaxis": {"title": y_col, "autorange": "reversed"}
+                }
+            }
+        except Exception as e:
+            print(f"Categorical heatmap error: {e}")
+            return None
+    
+    def _create_line_chart(self, df: pd.DataFrame, x_col: str, y_col: str, agg_func: str = None, options: dict = None) -> dict[str, Any]:
+        """Create a line chart with optional aggregation"""
+        try:
+            if agg_func:
+                # Aggregate by x column
+                agg_data = self._apply_aggregation(df, [x_col], y_col, agg_func)
+                agg_col = agg_data.columns[-1]
+                sorted_df = agg_data.sort_values(x_col)
+                
+                x_vals = sorted_df[x_col].tolist()
+                y_vals = sorted_df[agg_col].tolist()
+                y_title = f"{agg_func.upper()}({y_col})"
+            else:
+                sorted_df = df[[x_col, y_col]].dropna().sort_values(x_col)
+                
+                if len(sorted_df) == 0:
+                    return None
+                
+                x_vals = sorted_df[x_col].tolist()
+                y_vals = sorted_df[y_col].tolist()
+                y_title = y_col
+            
+            layout = {
+                "title": f"{y_title} over {x_col}",
+                "xaxis": {"title": x_col},
+                "yaxis": {"title": y_title}
+            }
+            
+            if options:
+                layout = self._apply_y_axis_options(layout, options)
             
             return {
                 "data": [{
                     "type": "scatter",
                     "mode": "lines+markers",
-                    "x": sorted_df[x_col].tolist(),
-                    "y": sorted_df[y_col].tolist(),
+                    "x": x_vals,
+                    "y": y_vals,
                     "line": {"color": self.COLORS[5]},
                     "marker": {"size": 4}
                 }],
-                "layout": {
-                    "title": f"{y_col} over {x_col}",
-                    "xaxis": {"title": x_col},
-                    "yaxis": {"title": y_col}
-                }
+                "layout": layout
             }
         except Exception as e:
             print(f"Line chart error: {e}")

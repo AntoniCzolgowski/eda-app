@@ -206,7 +206,7 @@
                         <div id="plots-display" class="plots-display"></div>
                     </div>
 
-                    <!-- Custom Tab - New Plot Builder -->
+                    <!-- Custom Tab - Enhanced Plot Builder -->
                     <div id="custom-tab" class="tab-pane">
                         <div class="custom-builder">
                             <div class="builder-sidebar">
@@ -236,6 +236,23 @@
                                             <span>Color / Group by <small>(optional)</small></span>
                                             <select id="color-axis-select" class="axis-dropdown">
                                                 <option value="">-- None --</option>
+                                            </select>
+                                        </label>
+                                    </div>
+                                    
+                                    <div class="axis-selector" id="aggregation-option" style="display: none;">
+                                        <label class="axis-label">
+                                            <span>Aggregation <small>(for Y values)</small></span>
+                                            <select id="aggregation-select" class="axis-dropdown">
+                                                <option value="">-- None --</option>
+                                                <option value="count">Count</option>
+                                                <option value="sum">Sum</option>
+                                                <option value="avg">Average</option>
+                                                <option value="min">Minimum</option>
+                                                <option value="max">Maximum</option>
+                                                <option value="median">Median</option>
+                                                <option value="std">Std Dev</option>
+                                                <option value="nunique">Unique Count</option>
                                             </select>
                                         </label>
                                     </div>
@@ -274,6 +291,13 @@
                                                     <span class="option-name">Bar Chart</span>
                                                 </span>
                                             </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="pie">
+                                                <span class="option-content">
+                                                    <span class="option-icon">🥧</span>
+                                                    <span class="option-name">Pie Chart</span>
+                                                </span>
+                                            </label>
                                         </div>
                                         <div class="plot-type-group">
                                             <span class="group-label">Two Variables</span>
@@ -296,6 +320,27 @@
                                                 <span class="option-content">
                                                     <span class="option-icon">📊</span>
                                                     <span class="option-name">Grouped Bar</span>
+                                                </span>
+                                            </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="stacked_bar">
+                                                <span class="option-content">
+                                                    <span class="option-icon">📚</span>
+                                                    <span class="option-name">Stacked Bar</span>
+                                                </span>
+                                            </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="heatmap_cat">
+                                                <span class="option-content">
+                                                    <span class="option-icon">🔥</span>
+                                                    <span class="option-name">Heatmap (Cat)</span>
+                                                </span>
+                                            </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="box_grouped">
+                                                <span class="option-content">
+                                                    <span class="option-icon">📦</span>
+                                                    <span class="option-name">Grouped Box</span>
                                                 </span>
                                             </label>
                                         </div>
@@ -321,7 +366,7 @@
                                             <label class="plot-type-option">
                                                 <input type="radio" name="plot-type" value="correlation">
                                                 <span class="option-content">
-                                                    <span class="option-icon">🔥</span>
+                                                    <span class="option-icon">🔗</span>
                                                     <span class="option-name">Correlation Matrix</span>
                                                 </span>
                                             </label>
@@ -350,7 +395,7 @@
                                             <label>Bin Count</label>
                                             <input type="number" id="bin-count-input" value="20" min="5" max="100">
                                         </div>
-                                        <div class="option-row">
+                                        <div class="option-row" id="x-range-option">
                                             <label>X Axis Range</label>
                                             <div class="range-inputs">
                                                 <input type="number" id="x-min-input" placeholder="Auto">
@@ -366,13 +411,13 @@
                                                 <input type="number" id="y-max-input" placeholder="Auto">
                                             </div>
                                         </div>
-                                        <div class="option-row">
+                                        <div class="option-row" id="x-tick-option">
                                             <label>X Tick Interval</label>
-                                            <input type="number" id="x-tick-input" placeholder="Auto" min="1">
+                                            <input type="number" id="x-tick-input" placeholder="Auto" min="0.1" step="any">
                                         </div>
                                         <div class="option-row" id="y-tick-option">
                                             <label>Y Tick Interval</label>
-                                            <input type="number" id="y-tick-input" placeholder="Auto" min="1">
+                                            <input type="number" id="y-tick-input" placeholder="Auto" min="0.1" step="any">
                                         </div>
                                         <div class="option-row" id="marker-size-option">
                                             <label>Marker Size</label>
@@ -385,7 +430,7 @@
                                             <span id="opacity-value">70%</span>
                                         </div>
                                         <div class="option-row">
-                                            <label>Scale Type</label>
+                                            <label>Y Scale Type</label>
                                             <select id="scale-type-input">
                                                 <option value="linear">Linear</option>
                                                 <option value="log">Logarithmic</option>

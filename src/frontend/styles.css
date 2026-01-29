@@ -728,6 +728,7 @@ body {
     padding: var(--space-md);
     background: var(--bg-tertiary);
     cursor: pointer;
+    gap: var(--space-sm);
 }
 
 .column-name {
@@ -737,6 +738,13 @@ body {
     word-break: break-all;
 }
 
+.column-header-right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    flex-shrink: 0;
+}
+
 .column-type {
     font-family: var(--font-mono);
     font-size: 0.75rem;
@@ -744,6 +752,31 @@ body {
     background: var(--bg-elevated);
     border-radius: var(--radius-sm);
     color: var(--accent-primary);
+}
+
+/* Type Conversion Button */
+.convert-type-btn {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    padding: var(--space-xs) var(--space-sm);
+    background: rgba(163, 113, 247, 0.15);
+    border: 1px solid rgba(163, 113, 247, 0.3);
+    border-radius: var(--radius-sm);
+    color: var(--accent-purple);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    white-space: nowrap;
+}
+
+.convert-type-btn:hover {
+    background: rgba(163, 113, 247, 0.25);
+    border-color: var(--accent-purple);
+    transform: scale(1.05);
+}
+
+.convert-type-btn:active {
+    transform: scale(0.98);
 }
 
 .column-card-body {
@@ -1016,7 +1049,7 @@ body {
 
 .custom-builder {
     display: grid;
-    grid-template-columns: 320px 1fr;
+    grid-template-columns: 340px 1fr;
     gap: var(--space-xl);
     min-height: 600px;
 }
@@ -1304,6 +1337,12 @@ body {
 .primary-btn:hover {
     opacity: 0.9;
     transform: translateY(-1px);
+}
+
+.primary-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
 }
 
 /* AI Suggestion Box */

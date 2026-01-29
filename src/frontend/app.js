@@ -1,6 +1,7 @@
 /**
  * EDA Insights - Frontend Application
  * Automated Exploratory Data Analysis
+ * Enhanced with aggregations, Y-axis scaling, type conversion
  */
 
 // ============================
@@ -34,6 +35,19 @@ const PLOTLY_LAYOUT = {
         zerolinecolor: 'rgba(48,54,61,0.8)'
     }
 };
+
+// Available aggregation functions
+const AGGREGATION_FUNCTIONS = [
+    { value: '', label: '-- None --' },
+    { value: 'count', label: 'Count' },
+    { value: 'sum', label: 'Sum' },
+    { value: 'avg', label: 'Average' },
+    { value: 'min', label: 'Minimum' },
+    { value: 'max', label: 'Maximum' },
+    { value: 'median', label: 'Median' },
+    { value: 'std', label: 'Std Dev' },
+    { value: 'nunique', label: 'Unique Count' }
+];
 
 // ============================
 // State Management
@@ -105,6 +119,7 @@ const elements = {
     xAxisSelect: document.getElementById('x-axis-select'),
     yAxisSelect: document.getElementById('y-axis-select'),
     colorAxisSelect: document.getElementById('color-axis-select'),
+    aggregationSelect: document.getElementById('aggregation-select'),
     plotOptionsSection: document.getElementById('plot-options-section'),
     binSizeOption: document.getElementById('bin-size-option'),
     binCountInput: document.getElementById('bin-count-input'),
@@ -272,7 +287,24 @@ async function pollProgress() {
     while (true) {
         try {
             const response = await fetch(`${API_BASE}/status/${state.jobId}`);
-            const data = await response.json();
+            
+            // Handle non-JSON responses
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                console.error('Non-JSON response from status endpoint');
+                await sleep(pollInterval);
+                continue;
+            }
+            
+            const text = await response.text();
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch (parseError) {
+                console.error('JSON parse error:', parseError, 'Response:', text.substring(0, 200));
+                await sleep(pollInterval);
+                continue;
+            }
             
             updateProgress(data.progress, getStatusMessage(data.progress));
             
@@ -396,7 +428,10 @@ function renderColumnsGrid(columns) {
                 <div>
                     <div class="column-name">${escapeHtml(col.name)}</div>
                 </div>
-                <span class="column-type">${formatDtype(col.dtype)}</span>
+                <div class="column-header-right">
+                    <span class="column-type">${formatDtype(col.dtype)}</span>
+                    ${renderTypeConversionButton(col)}
+                </div>
             </div>
             <div class="column-card-body">
                 <div class="column-meta">
@@ -408,6 +443,73 @@ function renderColumnsGrid(columns) {
         </div>
     `).join('');
 }
+
+function renderTypeConversionButton(col) {
+    // Show conversion button for text columns that could be categorical
+    if (col.dtype === 'text') {
+        const uniqueCount = col.stats?.unique_count || 0;
+        if (uniqueCount > 0 && uniqueCount <= 50) {
+            return `<button class="convert-type-btn" onclick="event.stopPropagation(); convertColumnType('${escapeHtml(col.name)}', 'categorical')" title="Convert to Categorical">
+                → Cat
+            </button>`;
+        }
+    }
+    
+    // Show conversion button for categorical that might be text
+    if (col.dtype === 'categorical') {
+        const uniqueCount = col.stats?.unique_count || 0;
+        if (uniqueCount > 15) {
+            return `<button class="convert-type-btn" onclick="event.stopPropagation(); convertColumnType('${escapeHtml(col.name)}', 'text')" title="Convert to Text">
+                → Text
+            </button>`;
+        }
+    }
+    
+    return '';
+}
+
+async function convertColumnType(columnName, newType) {
+    if (!state.jobId) {
+        alert('No active analysis');
+        return;
+    }
+    
+    const confirmMsg = `Convert column "${columnName}" to ${newType}?`;
+    if (!confirm(confirmMsg)) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/convert-column-type`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                job_id: state.jobId,
+                column_name: columnName,
+                new_type: newType
+            })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Conversion failed');
+        }
+        
+        const result = await response.json();
+        console.log('Conversion result:', result);
+        
+        // Refresh results from server
+        await fetchResults();
+        
+        alert(`Column "${columnName}" converted to ${newType} successfully!`);
+        
+    } catch (error) {
+        console.error('Conversion error:', error);
+        alert('Conversion failed: ' + error.message);
+    }
+}
+
+window.convertColumnType = convertColumnType;
 
 function formatDtype(dtype) {
     const dtypeMap = {
@@ -671,6 +773,13 @@ function setupCustomBuilder(columns) {
     elements.yAxisSelect.innerHTML = '<option value="">-- None --</option>' + options;
     elements.colorAxisSelect.innerHTML = '<option value="">-- None --</option>' + options;
     
+    // Populate aggregation dropdown
+    if (elements.aggregationSelect) {
+        elements.aggregationSelect.innerHTML = AGGREGATION_FUNCTIONS.map(agg => 
+            `<option value="${agg.value}">${agg.label}</option>`
+        ).join('');
+    }
+    
     // Setup event listeners
     elements.llmSuggestBtn.addEventListener('click', getLLMSuggestion);
     elements.generateCustomBtn.addEventListener('click', generateCustomPlot);
@@ -688,6 +797,19 @@ function setupCustomBuilder(columns) {
     elements.opacityInput?.addEventListener('input', () => {
         elements.opacityValue.textContent = elements.opacityInput.value + '%';
     });
+    
+    // Update aggregation visibility based on Y column selection
+    elements.yAxisSelect?.addEventListener('change', updateAggregationVisibility);
+}
+
+function updateAggregationVisibility() {
+    const aggregationOption = document.getElementById('aggregation-option');
+    const yColumn = elements.yAxisSelect?.value;
+    
+    if (aggregationOption) {
+        // Show aggregation when Y column is selected
+        aggregationOption.style.display = yColumn ? 'flex' : 'none';
+    }
 }
 
 function updatePlotOptions() {
@@ -713,17 +835,27 @@ function updatePlotOptions() {
         markerOption.style.display = ['scatter', 'scatter_color', 'bubble'].includes(selectedType) ? 'flex' : 'none';
     }
     
+    // Show/hide aggregation for relevant plot types
+    const aggregationOption = document.getElementById('aggregation-option');
+    if (aggregationOption) {
+        const aggPlots = ['bar', 'grouped_bar', 'stacked_bar', 'line', 'heatmap_cat', 'pie'];
+        aggregationOption.style.display = aggPlots.includes(selectedType) ? 'flex' : 'none';
+    }
+    
     // Show/hide Y axis options for single-variable plots
     const yRangeOption = document.getElementById('y-range-option');
     const yTickOption = document.getElementById('y-tick-option');
-    const isSingleVar = ['histogram', 'bar'].includes(selectedType);
-    if (yRangeOption) yRangeOption.style.display = isSingleVar ? 'none' : 'flex';
+    const isSingleVar = ['histogram', 'boxplot', 'violin', 'pie', 'wordcloud'].includes(selectedType);
+    
+    // Y-axis options are now shown for all charts that have Y axis (including histogram for frequency)
+    if (yRangeOption) yRangeOption.style.display = 'flex';
     if (yTickOption) yTickOption.style.display = isSingleVar ? 'none' : 'flex';
 }
 
 function getPlotOptions() {
     return {
         binCount: parseInt(elements.binCountInput?.value) || 20,
+        aggregation: elements.aggregationSelect?.value || null,
         xRange: {
             min: elements.xMinInput?.value ? parseFloat(elements.xMinInput.value) : null,
             max: elements.xMaxInput?.value ? parseFloat(elements.xMaxInput.value) : null
@@ -830,16 +962,17 @@ async function generateCustomPlot() {
     const plotType = selectedType.value;
     const options = getPlotOptions();
     
-    // Validate column requirements
-    const twoVarPlots = ['scatter', 'line', 'grouped_bar'];
-    const threeVarPlots = ['scatter_color', 'bubble'];
+    // Validate column requirements based on plot type
+    const twoVarPlots = ['scatter', 'line', 'grouped_bar', 'stacked_bar', 'heatmap_cat', 'box_grouped'];
+    const threeVarPlotsRequired = ['bubble']; // Only bubble strictly requires 3
+    const threeVarPlotsOptional = ['scatter_color']; // scatter_color works with 2 or 3
     
     if (twoVarPlots.includes(plotType) && !yColumn) {
         alert('Please select Y axis column for this plot type');
         return;
     }
     
-    if (threeVarPlots.includes(plotType) && (!yColumn || !colorColumn)) {
+    if (threeVarPlotsRequired.includes(plotType) && (!yColumn || !colorColumn)) {
         alert('Please select Y axis and Color/Size column for this plot type');
         return;
     }
@@ -848,22 +981,27 @@ async function generateCustomPlot() {
     elements.generateCustomBtn.textContent = 'Generating...';
     
     try {
+        const requestBody = {
+            job_id: state.jobId,
+            plot_type: plotType,
+            x_column: xColumn,
+            y_column: yColumn || null,
+            color_column: colorColumn || null,
+            columns: [xColumn, yColumn, colorColumn].filter(Boolean),
+            options: options
+        };
+        
+        console.log('Generating plot with:', requestBody);
+        
         const response = await fetch(`${API_BASE}/generate-plot`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                job_id: state.jobId,
-                plot_type: plotType,
-                x_column: xColumn,
-                y_column: yColumn || null,
-                color_column: colorColumn || null,
-                columns: [xColumn, yColumn, colorColumn].filter(Boolean),
-                options: options
-            })
+            body: JSON.stringify(requestBody)
         });
         
         if (!response.ok) {
-            throw new Error('Failed to generate plot');
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Failed to generate plot');
         }
         
         const plotData = await response.json();
@@ -932,8 +1070,8 @@ async function generateCustomPlot() {
         // Apply marker customizations to data
         const customData = plotData.plot_data.map(trace => {
             if (trace.marker) {
-                trace.marker.size = options.markerSize;
-                trace.marker.opacity = options.opacity;
+                trace.marker.size = trace.marker.size || options.markerSize;
+                trace.marker.opacity = trace.marker.opacity || options.opacity;
             }
             if (trace.opacity !== undefined) {
                 trace.opacity = options.opacity;
@@ -947,7 +1085,7 @@ async function generateCustomPlot() {
         
     } catch (error) {
         console.error('Generate error:', error);
-        alert('Failed to generate plot');
+        alert('Failed to generate plot: ' + error.message);
     } finally {
         elements.generateCustomBtn.disabled = false;
         elements.generateCustomBtn.textContent = 'Generate Plot';
@@ -1027,6 +1165,11 @@ function clearPreviousResults() {
     }
     if (elements.colorAxisSelect) {
         elements.colorAxisSelect.innerHTML = '<option value="">-- None --</option>';
+    }
+    if (elements.aggregationSelect) {
+        elements.aggregationSelect.innerHTML = AGGREGATION_FUNCTIONS.map(agg => 
+            `<option value="${agg.value}">${agg.label}</option>`
+        ).join('');
     }
     
     // Reset plot options
