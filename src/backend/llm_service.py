@@ -18,7 +18,42 @@ class LLMService:
         else:
             self.client = Anthropic(api_key=api_key)
         
-        self.model = "claude-3-haiku-20240307"
+        self.model = "claude-haiku-4-5-20251001"
+    
+    async def summarize_text_column(self, column_name: str, sample_values: list[str]) -> str:
+        """Generate a short 2-3 sentence summary of what a text column contains"""
+        
+        if not self.client:
+            return f"Text column containing varied textual data."
+        
+        sample_text = "\n".join([f"- {str(v)[:150]}" for v in sample_values[:12]])
+        
+        prompt = f"""Analyze this text column from a dataset and write a 2-3 sentence summary describing what kind of data it contains.
+
+Column name: {column_name}
+
+Sample values:
+{sample_text}
+
+Write a brief, informative summary (2-3 sentences) describing:
+- What type of text data this appears to be
+- The general content/theme
+- Any patterns you notice
+
+Respond with ONLY the summary text, no labels or prefixes."""
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=150,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            return response.content[0].text.strip()
+            
+        except Exception as e:
+            print(f"Text summary error: {e}")
+            return f"Text column '{column_name}' contains varied textual data."
     
     async def analyze(
         self, 

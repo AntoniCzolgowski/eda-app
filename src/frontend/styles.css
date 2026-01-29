@@ -811,6 +811,55 @@ body {
     font-size: 0.8125rem;
 }
 
+.stat-item.full-width {
+    grid-column: span 2;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+.stat-item.text-summary {
+    background: rgba(88, 166, 255, 0.05);
+    padding: var(--space-sm);
+    border-radius: var(--radius-sm);
+    margin-top: var(--space-sm);
+}
+
+.stat-item.text-summary .stat-label {
+    color: var(--accent-primary);
+    font-weight: 500;
+    margin-bottom: var(--space-xs);
+}
+
+.stat-item.text-summary-box {
+    background: rgba(126, 231, 135, 0.08);
+    padding: var(--space-md);
+    border-radius: var(--radius-sm);
+    border-left: 3px solid var(--accent-secondary);
+    margin-bottom: var(--space-sm);
+}
+
+.stat-item.text-summary-box .stat-label {
+    color: var(--accent-secondary);
+    font-weight: 600;
+    font-size: 0.8125rem;
+    display: block;
+    margin-bottom: var(--space-xs);
+}
+
+.text-summary-content {
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    line-height: 1.6;
+    margin: 0;
+}
+
+.summary-content {
+    color: var(--text-primary);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    margin: 0;
+}
+
 .stat-label {
     color: var(--text-secondary);
 }
@@ -1002,6 +1051,117 @@ body {
     max-height: 200px;
     overflow-y: auto;
     padding-right: var(--space-sm);
+}
+
+/* Axis Selectors */
+.axis-selector {
+    margin-bottom: var(--space-md);
+}
+
+.axis-label {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+.axis-label span {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+.axis-label small {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.axis-dropdown {
+    width: 100%;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.axis-dropdown:hover {
+    border-color: var(--accent-primary);
+}
+
+.axis-dropdown:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+}
+
+/* Plot Options */
+.plot-options {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.option-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.option-row label {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    min-width: 100px;
+}
+
+.option-row input[type="number"],
+.option-row input[type="text"],
+.option-row select {
+    flex: 1;
+    padding: var(--space-xs) var(--space-sm);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+}
+
+.option-row input[type="number"]:focus,
+.option-row input[type="text"]:focus,
+.option-row select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.option-row input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent-primary);
+}
+
+.option-row input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent-primary);
+}
+
+.range-inputs {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    flex: 1;
+}
+
+.range-inputs input {
+    width: 70px;
+    flex: none;
+}
+
+.range-inputs span {
+    color: var(--text-muted);
+    font-size: 0.75rem;
 }
 
 .column-checkbox {

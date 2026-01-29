@@ -50,11 +50,11 @@
                         </div>
                         <div class="zone-text">
                             <strong>Schema (optional)</strong>
-                            <span>CSV or TXT with column descriptions</span>
+                            <span>CSV, TXT, or PDF with column descriptions</span>
                         </div>
                         <div class="zone-filename" id="schema-filename"></div>
                     </div>
-                    <input type="file" id="schema-input" accept=".csv,.txt" hidden>
+                    <input type="file" id="schema-input" accept=".csv,.txt,.pdf" hidden>
                 </div>
             </div>
 
@@ -211,8 +211,34 @@
                         <div class="custom-builder">
                             <div class="builder-sidebar">
                                 <div class="builder-section">
-                                    <h4>1. Select Columns</h4>
-                                    <div id="column-checkboxes" class="column-checkboxes"></div>
+                                    <h4>1. Select Variables</h4>
+                                    
+                                    <div class="axis-selector">
+                                        <label class="axis-label">
+                                            <span>X Axis</span>
+                                            <select id="x-axis-select" class="axis-dropdown">
+                                                <option value="">-- Select column --</option>
+                                            </select>
+                                        </label>
+                                    </div>
+                                    
+                                    <div class="axis-selector">
+                                        <label class="axis-label">
+                                            <span>Y Axis <small>(optional)</small></span>
+                                            <select id="y-axis-select" class="axis-dropdown">
+                                                <option value="">-- None --</option>
+                                            </select>
+                                        </label>
+                                    </div>
+                                    
+                                    <div class="axis-selector">
+                                        <label class="axis-label">
+                                            <span>Color / Group by <small>(optional)</small></span>
+                                            <select id="color-axis-select" class="axis-dropdown">
+                                                <option value="">-- None --</option>
+                                            </select>
+                                        </label>
+                                    </div>
                                 </div>
                                 
                                 <div class="builder-section">
@@ -306,6 +332,72 @@
                                                     <span class="option-name">Pair Plot</span>
                                                 </span>
                                             </label>
+                                            <label class="plot-type-option">
+                                                <input type="radio" name="plot-type" value="wordcloud">
+                                                <span class="option-content">
+                                                    <span class="option-icon">☁️</span>
+                                                    <span class="option-name">Word Cloud</span>
+                                                </span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="builder-section" id="plot-options-section" style="display: none;">
+                                    <h4>3. Customize</h4>
+                                    <div class="plot-options">
+                                        <div class="option-row" id="bin-size-option" style="display: none;">
+                                            <label>Bin Count</label>
+                                            <input type="number" id="bin-count-input" value="20" min="5" max="100">
+                                        </div>
+                                        <div class="option-row">
+                                            <label>X Axis Range</label>
+                                            <div class="range-inputs">
+                                                <input type="number" id="x-min-input" placeholder="Auto">
+                                                <span>to</span>
+                                                <input type="number" id="x-max-input" placeholder="Auto">
+                                            </div>
+                                        </div>
+                                        <div class="option-row" id="y-range-option">
+                                            <label>Y Axis Range</label>
+                                            <div class="range-inputs">
+                                                <input type="number" id="y-min-input" placeholder="Auto">
+                                                <span>to</span>
+                                                <input type="number" id="y-max-input" placeholder="Auto">
+                                            </div>
+                                        </div>
+                                        <div class="option-row">
+                                            <label>X Tick Interval</label>
+                                            <input type="number" id="x-tick-input" placeholder="Auto" min="1">
+                                        </div>
+                                        <div class="option-row" id="y-tick-option">
+                                            <label>Y Tick Interval</label>
+                                            <input type="number" id="y-tick-input" placeholder="Auto" min="1">
+                                        </div>
+                                        <div class="option-row" id="marker-size-option">
+                                            <label>Marker Size</label>
+                                            <input type="range" id="marker-size-input" min="3" max="20" value="8">
+                                            <span id="marker-size-value">8</span>
+                                        </div>
+                                        <div class="option-row">
+                                            <label>Opacity</label>
+                                            <input type="range" id="opacity-input" min="10" max="100" value="70">
+                                            <span id="opacity-value">70%</span>
+                                        </div>
+                                        <div class="option-row">
+                                            <label>Scale Type</label>
+                                            <select id="scale-type-input">
+                                                <option value="linear">Linear</option>
+                                                <option value="log">Logarithmic</option>
+                                            </select>
+                                        </div>
+                                        <div class="option-row">
+                                            <label>Show Grid</label>
+                                            <input type="checkbox" id="grid-toggle" checked>
+                                        </div>
+                                        <div class="option-row">
+                                            <label>Custom Title</label>
+                                            <input type="text" id="custom-title-input" placeholder="Auto-generated">
                                         </div>
                                     </div>
                                 </div>

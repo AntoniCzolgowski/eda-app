@@ -90,15 +90,7 @@ class PlotGenerator:
                             "data": bar_plot
                         })
             
-            elif dtype == "text":
-                # Word frequency chart for text columns
-                word_plot = self._create_word_frequency(df, col_name)
-                if word_plot:
-                    plots.append({
-                        "column": col_name,
-                        "type": "word_frequency",
-                        "data": word_plot
-                    })
+            # No auto-plots for text columns - they get LLM summaries instead
         
         return {"auto": plots}
     
@@ -109,14 +101,21 @@ class PlotGenerator:
         x_column: str, 
         y_column: Optional[str] = None,
         color_column: Optional[str] = None,
-        columns: Optional[list] = None
+        columns: Optional[list] = None,
+        options: Optional[dict] = None
     ) -> dict[str, Any]:
         """Generate a custom plot based on user selection"""
         
+        if options is None:
+            options = {}
+        
         plot = None
         
+        # Extract options
+        bin_count = options.get('binCount', 20)
+        
         if plot_type == "histogram":
-            plot = self._create_histogram(df, x_column)
+            plot = self._create_histogram(df, x_column, bin_count)
         elif plot_type == "boxplot":
             plot = self._create_boxplot(df, x_column)
         elif plot_type == "violin":
@@ -137,18 +136,24 @@ class PlotGenerator:
             plot = self._create_correlation_matrix(df, columns)
         elif plot_type == "pairplot" and columns:
             plot = self._create_pairplot(df, columns[:4])  # Limit to 4 columns
+        elif plot_type == "wordcloud":
+            plot = self._create_wordcloud(df, x_column)
         else:
-            plot = self._create_histogram(df, x_column)
+            plot = self._create_histogram(df, x_column, bin_count)
         
         if plot is None:
             plot = {"data": [], "layout": {"title": "Could not generate plot"}}
+        
+        # If it's an image-based plot, pass through directly
+        if plot.get("is_image"):
+            return plot
         
         return {
             "plot_data": plot.get("data", []),
             "plot_layout": plot.get("layout", {})
         }
     
-    def _create_histogram(self, df: pd.DataFrame, column: str) -> dict[str, Any]:
+    def _create_histogram(self, df: pd.DataFrame, column: str, bin_count: int = 20) -> dict[str, Any]:
         """Create a histogram for numeric data"""
         try:
             data = pd.to_numeric(df[column], errors='coerce').dropna()
@@ -156,7 +161,8 @@ class PlotGenerator:
             if len(data) == 0:
                 return None
             
-            n_bins = min(int(np.sqrt(len(data))), 50)
+            # Use provided bin count or calculate optimal
+            n_bins = min(bin_count, 100)
             
             return {
                 "data": [{
@@ -564,3 +570,60 @@ class PlotGenerator:
         except Exception as e:
             print(f"Word frequency error for {column}: {e}")
             return None
+    
+    def _create_wordcloud(self, df: pd.DataFrame, column: str) -> dict[str, Any]:
+        """Create a word cloud for text columns using matplotlib"""
+        try:
+            from wordcloud import WordCloud
+            import matplotlib
+            matplotlib.use('Agg')  # Non-interactive backend
+            import matplotlib.pyplot as plt
+            import base64
+            from io import BytesIO
+            
+            # Combine all text
+            text_data = df[column].dropna().astype(str)
+            all_text = ' '.join(text_data)
+            
+            if not all_text.strip():
+                return None
+            
+            # Generate word cloud
+            wordcloud = WordCloud(
+                width=800,
+                height=400,
+                background_color='#161b22',
+                colormap='Blues',
+                max_words=100,
+                min_font_size=10,
+                max_font_size=80
+            ).generate(all_text)
+            
+            # Create matplotlib figure
+            fig, ax = plt.subplots(figsize=(10, 5))
+            ax.imshow(wordcloud, interpolation='bilinear')
+            ax.axis('off')
+            ax.set_title(f'Word Cloud: {column}', color='white', fontsize=14, pad=10)
+            fig.patch.set_facecolor('#161b22')
+            
+            # Save to base64
+            buffer = BytesIO()
+            plt.savefig(buffer, format='png', facecolor='#161b22', edgecolor='none', bbox_inches='tight', dpi=100)
+            buffer.seek(0)
+            img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            plt.close(fig)
+            
+            # Return as image data
+            return {
+                "is_image": True,
+                "image_base64": img_base64,
+                "plot_data": [],
+                "plot_layout": {}
+            }
+            
+        except ImportError:
+            print("wordcloud library not installed, falling back to word frequency bar chart")
+            return self._create_word_frequency(df, column)
+        except Exception as e:
+            print(f"Word cloud error for {column}: {e}")
+            return self._create_word_frequency(df, column)

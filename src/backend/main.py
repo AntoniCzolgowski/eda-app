@@ -1,6 +1,12 @@
 """
 FastAPI backend for EDA application
 """
+import os
+from dotenv import load_dotenv
+
+# Load .env file BEFORE other imports that need API key
+load_dotenv()
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -108,7 +114,45 @@ async def upload_file(
     
     schema_content = None
     if schema:
-        schema_content = (await schema.read()).decode('utf-8')
+        schema_bytes = await schema.read()
+        
+        # Handle PDF schemas
+        if schema.filename.lower().endswith('.pdf'):
+            try:
+                import pdfplumber
+                from io import BytesIO
+                
+                pdf_text = []
+                with pdfplumber.open(BytesIO(schema_bytes)) as pdf:
+                    # Limit to first 2 pages
+                    for i, page in enumerate(pdf.pages[:2]):
+                        text = page.extract_text()
+                        if text:
+                            pdf_text.append(text)
+                
+                schema_content = "\n\n".join(pdf_text)
+            except ImportError:
+                # Try PyPDF2 as fallback
+                try:
+                    from PyPDF2 import PdfReader
+                    from io import BytesIO
+                    
+                    reader = PdfReader(BytesIO(schema_bytes))
+                    pdf_text = []
+                    for i, page in enumerate(reader.pages[:2]):
+                        text = page.extract_text()
+                        if text:
+                            pdf_text.append(text)
+                    schema_content = "\n\n".join(pdf_text)
+                except Exception as e:
+                    print(f"PDF parsing error: {e}")
+                    schema_content = None
+            except Exception as e:
+                print(f"PDF parsing error: {e}")
+                schema_content = None
+        else:
+            # Regular text/CSV schema
+            schema_content = schema_bytes.decode('utf-8')
     
     jobs[job_id] = AnalysisJob(
         job_id=job_id,
@@ -137,15 +181,29 @@ async def run_analysis(job_id: str, df: pd.DataFrame, filename: str, schema_cont
         job.progress = 40
         await asyncio.sleep(0.1)
         
-        # Stage 2: Generate plots (40-60%)
-        job.progress = 50
+        # Stage 2: Generate plots (40-50%)
+        job.progress = 45
         plots = plot_generator.generate_auto_plots(df, analysis["columns"])
         analysis["plots"] = plots
         
-        job.progress = 60
+        job.progress = 50
         await asyncio.sleep(0.1)
         
-        # Stage 3: LLM analysis (60-90%)
+        # Stage 3: Generate text column summaries (50-65%)
+        text_columns = [col for col in analysis["columns"] if col["dtype"] == "text"]
+        for i, col in enumerate(text_columns):
+            job.progress = 50 + int(15 * (i + 1) / max(len(text_columns), 1))
+            
+            # Get sample values for LLM
+            sample_values = col.get("stats", {}).get("sample_values", [])
+            if sample_values:
+                summary = await llm_service.summarize_text_column(col["name"], sample_values)
+                col["stats"]["text_summary"] = summary
+        
+        job.progress = 65
+        await asyncio.sleep(0.1)
+        
+        # Stage 4: LLM analysis (65-90%)
         job.progress = 70
         llm_analysis = await llm_service.analyze(
             analysis["dataset_info"],
@@ -231,6 +289,7 @@ async def generate_plot(request: dict):
     y_column = request.get("y_column")
     color_column = request.get("color_column")
     columns = request.get("columns", [])
+    options = request.get("options", {})
     
     if job_id not in dataframes:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -238,8 +297,17 @@ async def generate_plot(request: dict):
     df = dataframes[job_id]
     
     plot_data = plot_generator.generate_custom_plot(
-        df, plot_type, x_column, y_column, color_column, columns
+        df, plot_type, x_column, y_column, color_column, columns, options
     )
+    
+    # Check if it's an image-based plot (like word cloud)
+    if plot_data.get("is_image"):
+        return {
+            "is_image": True,
+            "image_base64": plot_data.get("image_base64"),
+            "plot_data": [],
+            "plot_layout": {}
+        }
     
     return plot_data
 

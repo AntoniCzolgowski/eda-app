@@ -102,7 +102,25 @@ const elements = {
     plotsDisplay: document.getElementById('plots-display'),
     
     // Custom Builder
-    columnCheckboxes: document.getElementById('column-checkboxes'),
+    xAxisSelect: document.getElementById('x-axis-select'),
+    yAxisSelect: document.getElementById('y-axis-select'),
+    colorAxisSelect: document.getElementById('color-axis-select'),
+    plotOptionsSection: document.getElementById('plot-options-section'),
+    binSizeOption: document.getElementById('bin-size-option'),
+    binCountInput: document.getElementById('bin-count-input'),
+    xMinInput: document.getElementById('x-min-input'),
+    xMaxInput: document.getElementById('x-max-input'),
+    yMinInput: document.getElementById('y-min-input'),
+    yMaxInput: document.getElementById('y-max-input'),
+    xTickInput: document.getElementById('x-tick-input'),
+    yTickInput: document.getElementById('y-tick-input'),
+    markerSizeInput: document.getElementById('marker-size-input'),
+    markerSizeValue: document.getElementById('marker-size-value'),
+    opacityInput: document.getElementById('opacity-input'),
+    opacityValue: document.getElementById('opacity-value'),
+    scaleTypeInput: document.getElementById('scale-type-input'),
+    gridToggle: document.getElementById('grid-toggle'),
+    customTitleInput: document.getElementById('custom-title-input'),
     llmSuggestBtn: document.getElementById('llm-suggest-btn'),
     generateCustomBtn: document.getElementById('generate-custom-btn'),
     aiSuggestionBox: document.getElementById('ai-suggestion-box'),
@@ -155,15 +173,18 @@ function setupFileUpload(zone, input, filenameEl, fileType) {
 }
 
 function handleFileSelect(file, zone, filenameEl, fileType) {
+    console.log('handleFileSelect:', fileType, file.name);
+    
     if (fileType === 'csv') {
         if (!file.name.endsWith('.csv')) {
             alert('Please select a CSV file');
             return;
         }
         state.csvFile = file;
+        console.log('state.csvFile set to:', state.csvFile);
     } else {
-        if (!file.name.endsWith('.csv') && !file.name.endsWith('.txt')) {
-            alert('Please select a CSV or TXT file');
+        if (!file.name.endsWith('.csv') && !file.name.endsWith('.txt') && !file.name.endsWith('.pdf')) {
+            alert('Please select a CSV, TXT, or PDF file');
             return;
         }
         state.schemaFile = file;
@@ -176,7 +197,9 @@ function handleFileSelect(file, zone, filenameEl, fileType) {
 }
 
 function updateAnalyzeButton() {
-    elements.analyzeBtn.disabled = !state.csvFile;
+    const hasFile = !!state.csvFile;
+    console.log('updateAnalyzeButton - hasFile:', hasFile);
+    elements.analyzeBtn.disabled = !hasFile;
 }
 
 // ============================
@@ -184,6 +207,25 @@ function updateAnalyzeButton() {
 // ============================
 
 async function uploadAndAnalyze() {
+    console.log('uploadAndAnalyze called');
+    console.log('state.csvFile:', state.csvFile);
+    
+    if (!state.csvFile) {
+        alert('No file selected');
+        return;
+    }
+    
+    // Save file reference before clearing
+    const csvFile = state.csvFile;
+    const schemaFile = state.schemaFile;
+    
+    // Clear previous results (but keep file inputs)
+    clearPreviousResults();
+    
+    // Restore file references
+    state.csvFile = csvFile;
+    state.schemaFile = schemaFile;
+    
     showScreen('loading-screen');
     updateProgress(0, 'Uploading file...');
     
@@ -194,16 +236,23 @@ async function uploadAndAnalyze() {
             formData.append('schema', state.schemaFile);
         }
         
+        console.log('Sending request to:', `${API_BASE}/upload`);
+        
         const uploadResponse = await fetch(`${API_BASE}/upload`, {
             method: 'POST',
             body: formData
         });
         
+        console.log('Upload response status:', uploadResponse.status);
+        
         if (!uploadResponse.ok) {
-            throw new Error('Upload failed');
+            const errorText = await uploadResponse.text();
+            console.error('Upload error:', errorText);
+            throw new Error('Upload failed: ' + errorText);
         }
         
         const uploadData = await uploadResponse.json();
+        console.log('Upload data:', uploadData);
         state.jobId = uploadData.job_id;
         
         updateProgress(10, 'File uploaded, starting analysis...');
@@ -373,6 +422,19 @@ function formatDtype(dtype) {
     return dtypeMap[dtype] || dtype;
 }
 
+function getColumnIcon(dtype) {
+    const icons = {
+        'numeric_int': '🔢',
+        'numeric_float': '📊',
+        'categorical': '🏷️',
+        'text': '📝',
+        'datetime': '📅',
+        'identifier': '🔑',
+        'unknown': '❓'
+    };
+    return icons[dtype] || '📊';
+}
+
 function renderQualityFlags(flags) {
     if (!flags || flags.length === 0) return '';
     
@@ -396,7 +458,33 @@ function renderColumnStats(col) {
     const stats = col.stats;
     let statsHtml = '';
     
-    if (col.dtype.startsWith('numeric')) {
+    if (col.dtype === 'datetime' && stats.is_datetime) {
+        // Datetime stats - no mean/median/std
+        statsHtml = `
+            <div class="stat-item"><span class="stat-label">Earliest</span><span class="stat-value">${stats.min_date || '-'}</span></div>
+            <div class="stat-item"><span class="stat-label">Latest</span><span class="stat-value">${stats.max_date || '-'}</span></div>
+            <div class="stat-item"><span class="stat-label">Range (days)</span><span class="stat-value">${formatNumber(stats.date_range_days)}</span></div>
+            <div class="stat-item"><span class="stat-label">Unique Dates</span><span class="stat-value">${formatNumber(stats.unique_count)}</span></div>
+        `;
+    } else if (col.dtype === 'identifier' || stats.is_identifier) {
+        // ID stats - only min, max, count
+        statsHtml = `
+            <div class="stat-item full-width"><span class="stat-label">ℹ️ ${stats.message || 'Identifier column'}</span></div>
+            <div class="stat-item"><span class="stat-label">Unique Values</span><span class="stat-value">${formatNumber(stats.unique_count)}</span></div>
+        `;
+        if (stats.min !== undefined) {
+            statsHtml += `
+                <div class="stat-item"><span class="stat-label">Min ID</span><span class="stat-value">${formatNumber(stats.min)}</span></div>
+                <div class="stat-item"><span class="stat-label">Max ID</span><span class="stat-value">${formatNumber(stats.max)}</span></div>
+            `;
+        }
+        if (stats.sample_values) {
+            statsHtml += `
+                <div class="stat-item full-width"><span class="stat-label">Sample</span><span class="stat-value">${stats.sample_values.join(', ')}</span></div>
+            `;
+        }
+    } else if (col.dtype.startsWith('numeric')) {
+        // Numeric stats
         statsHtml = `
             <div class="stat-item"><span class="stat-label">Min</span><span class="stat-value">${formatNumber(stats.min)}</span></div>
             <div class="stat-item"><span class="stat-label">Max</span><span class="stat-value">${formatNumber(stats.max)}</span></div>
@@ -411,12 +499,35 @@ function renderColumnStats(col) {
             <div class="stat-item"><span class="stat-label">Outliers High</span><span class="stat-value">${stats.outliers_high}</span></div>
         `;
     } else if (col.dtype === 'categorical' && stats.top_values) {
+        // Categorical stats
         statsHtml = `
             <div class="stat-item"><span class="stat-label">Unique</span><span class="stat-value">${stats.unique_count}</span></div>
             ${stats.top_values.slice(0, 5).map(v => 
                 `<div class="stat-item"><span class="stat-label">${escapeHtml(String(v.value))}</span><span class="stat-value">${v.count} (${v.percent}%)</span></div>`
             ).join('')}
         `;
+    } else if (col.dtype === 'text') {
+        // Text stats - show LLM summary
+        if (stats.text_summary) {
+            statsHtml = `
+                <div class="stat-item full-width text-summary-box">
+                    <span class="stat-label">📝 Content Summary</span>
+                    <p class="text-summary-content">${escapeHtml(stats.text_summary)}</p>
+                </div>
+                <div class="stat-item"><span class="stat-label">Unique Values</span><span class="stat-value">${formatNumber(stats.unique_count)}</span></div>
+                <div class="stat-item"><span class="stat-label">Avg Length</span><span class="stat-value">${formatNumber(stats.avg_length)} chars</span></div>
+            `;
+        } else {
+            statsHtml = `
+                <div class="stat-item"><span class="stat-label">Unique</span><span class="stat-value">${formatNumber(stats.unique_count)}</span></div>
+                <div class="stat-item"><span class="stat-label">Avg Length</span><span class="stat-value">${formatNumber(stats.avg_length)} chars</span></div>
+            `;
+            if (stats.sample_values && stats.sample_values.length > 0) {
+                statsHtml += `
+                    <div class="stat-item full-width"><span class="stat-label">Sample</span><span class="stat-value" style="font-size: 0.75rem">${stats.sample_values.slice(0, 2).map(s => escapeHtml(String(s).substring(0, 40))).join(', ')}</span></div>
+                `;
+            }
+        }
     }
     
     return `<div class="column-stats">${statsHtml}</div>`;
@@ -465,19 +576,6 @@ function renderPlotsColumnSelector(columns, plots) {
             </button>
         `;
     }).join('');
-}
-
-function getColumnIcon(dtype) {
-    const icons = {
-        'numeric_int': '🔢',
-        'numeric_float': '📊',
-        'categorical': '🏷️',
-        'text': '📝',
-        'datetime': '📅',
-        'identifier': '🔑',
-        'unknown': '❓'
-    };
-    return icons[dtype] || '📊';
 }
 
 function selectPlotColumn(columnName) {
@@ -558,37 +656,113 @@ function capitalizeFirst(str) {
 // ============================
 
 function setupCustomBuilder(columns) {
-    // Render column checkboxes
-    elements.columnCheckboxes.innerHTML = columns
-        .filter(col => {
-            const flags = col.quality_flags || [];
-            return !flags.includes('single_value');
-        })
-        .map(col => `
-            <label class="column-checkbox">
-                <input type="checkbox" value="${escapeHtml(col.name)}" onchange="updateCustomSelection()">
-                <span class="cb-name">${escapeHtml(col.name)}</span>
-                <span class="cb-type">${formatDtype(col.dtype)}</span>
-            </label>
-        `).join('');
+    // Filter out single-value columns
+    const validColumns = columns.filter(col => {
+        const flags = col.quality_flags || [];
+        return !flags.includes('single_value');
+    });
+    
+    // Populate axis dropdowns
+    const options = validColumns.map(col => 
+        `<option value="${escapeHtml(col.name)}" data-dtype="${col.dtype}">${escapeHtml(col.name)} (${formatDtype(col.dtype)})</option>`
+    ).join('');
+    
+    elements.xAxisSelect.innerHTML = '<option value="">-- Select column --</option>' + options;
+    elements.yAxisSelect.innerHTML = '<option value="">-- None --</option>' + options;
+    elements.colorAxisSelect.innerHTML = '<option value="">-- None --</option>' + options;
     
     // Setup event listeners
     elements.llmSuggestBtn.addEventListener('click', getLLMSuggestion);
     elements.generateCustomBtn.addEventListener('click', generateCustomPlot);
-}
-
-function updateCustomSelection() {
-    const checkboxes = elements.columnCheckboxes.querySelectorAll('input:checked');
-    state.customSelectedColumns = Array.from(checkboxes).map(cb => cb.value);
     
-    // Hide previous suggestion
-    elements.aiSuggestionBox.classList.add('hidden');
+    // Show/hide options based on plot type
+    document.querySelectorAll('input[name="plot-type"]').forEach(radio => {
+        radio.addEventListener('change', updatePlotOptions);
+    });
+    
+    // Update slider display values
+    elements.markerSizeInput?.addEventListener('input', () => {
+        elements.markerSizeValue.textContent = elements.markerSizeInput.value;
+    });
+    
+    elements.opacityInput?.addEventListener('input', () => {
+        elements.opacityValue.textContent = elements.opacityInput.value + '%';
+    });
 }
 
-window.updateCustomSelection = updateCustomSelection;
+function updatePlotOptions() {
+    const selectedType = document.querySelector('input[name="plot-type"]:checked')?.value;
+    
+    if (!selectedType) {
+        elements.plotOptionsSection.style.display = 'none';
+        return;
+    }
+    
+    // Show options section
+    elements.plotOptionsSection.style.display = 'block';
+    
+    // Show/hide bin count for histogram
+    const binOption = document.getElementById('bin-size-option');
+    if (binOption) {
+        binOption.style.display = selectedType === 'histogram' ? 'flex' : 'none';
+    }
+    
+    // Show/hide marker size for scatter plots
+    const markerOption = document.getElementById('marker-size-option');
+    if (markerOption) {
+        markerOption.style.display = ['scatter', 'scatter_color', 'bubble'].includes(selectedType) ? 'flex' : 'none';
+    }
+    
+    // Show/hide Y axis options for single-variable plots
+    const yRangeOption = document.getElementById('y-range-option');
+    const yTickOption = document.getElementById('y-tick-option');
+    const isSingleVar = ['histogram', 'bar'].includes(selectedType);
+    if (yRangeOption) yRangeOption.style.display = isSingleVar ? 'none' : 'flex';
+    if (yTickOption) yTickOption.style.display = isSingleVar ? 'none' : 'flex';
+}
+
+function getPlotOptions() {
+    return {
+        binCount: parseInt(elements.binCountInput?.value) || 20,
+        xRange: {
+            min: elements.xMinInput?.value ? parseFloat(elements.xMinInput.value) : null,
+            max: elements.xMaxInput?.value ? parseFloat(elements.xMaxInput.value) : null
+        },
+        yRange: {
+            min: elements.yMinInput?.value ? parseFloat(elements.yMinInput.value) : null,
+            max: elements.yMaxInput?.value ? parseFloat(elements.yMaxInput.value) : null
+        },
+        xTick: elements.xTickInput?.value ? parseFloat(elements.xTickInput.value) : null,
+        yTick: elements.yTickInput?.value ? parseFloat(elements.yTickInput.value) : null,
+        markerSize: parseInt(elements.markerSizeInput?.value) || 8,
+        opacity: (parseInt(elements.opacityInput?.value) || 70) / 100,
+        scaleType: elements.scaleTypeInput?.value || 'linear',
+        showGrid: elements.gridToggle?.checked !== false,
+        customTitle: elements.customTitleInput?.value || null
+    };
+}
 
 async function getLLMSuggestion() {
-    if (state.customSelectedColumns.length === 0) {
+    const xColumn = elements.xAxisSelect.value;
+    const yColumn = elements.yAxisSelect.value;
+    const colorColumn = elements.colorAxisSelect.value;
+    
+    // Build columns list for suggestion
+    const selectedColumns = [];
+    if (xColumn) {
+        const col = state.columns.find(c => c.name === xColumn);
+        if (col) selectedColumns.push(col);
+    }
+    if (yColumn) {
+        const col = state.columns.find(c => c.name === yColumn);
+        if (col) selectedColumns.push(col);
+    }
+    if (colorColumn) {
+        const col = state.columns.find(c => c.name === colorColumn);
+        if (col) selectedColumns.push(col);
+    }
+    
+    if (selectedColumns.length === 0) {
         alert('Please select at least one column');
         return;
     }
@@ -602,7 +776,7 @@ async function getLLMSuggestion() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 job_id: state.jobId,
-                columns: state.customSelectedColumns
+                columns: selectedColumns.map(c => c.name)
             })
         });
         
@@ -620,6 +794,7 @@ async function getLLMSuggestion() {
         const radioBtn = document.querySelector(`input[name="plot-type"][value="${suggestion.plot_type}"]`);
         if (radioBtn) {
             radioBtn.checked = true;
+            updatePlotOptions();
         }
         
     } catch (error) {
@@ -638,42 +813,34 @@ async function getLLMSuggestion() {
 
 async function generateCustomPlot() {
     const selectedType = document.querySelector('input[name="plot-type"]:checked');
+    const xColumn = elements.xAxisSelect.value;
+    const yColumn = elements.yAxisSelect.value;
+    const colorColumn = elements.colorAxisSelect.value;
     
     if (!selectedType) {
         alert('Please select a plot type');
         return;
     }
     
-    if (state.customSelectedColumns.length === 0) {
-        alert('Please select at least one column');
+    if (!xColumn) {
+        alert('Please select at least X axis column');
         return;
     }
     
     const plotType = selectedType.value;
-    const columns = state.customSelectedColumns;
+    const options = getPlotOptions();
     
-    // Validate column count for plot type
-    const singleVarPlots = ['histogram', 'boxplot', 'violin', 'bar'];
+    // Validate column requirements
     const twoVarPlots = ['scatter', 'line', 'grouped_bar'];
     const threeVarPlots = ['scatter_color', 'bubble'];
-    const specialPlots = ['correlation', 'pairplot'];
     
-    if (singleVarPlots.includes(plotType) && columns.length !== 1) {
-        if (columns.length > 1) {
-            // Just use first column
-        } else {
-            alert('Please select 1 column for this plot type');
-            return;
-        }
-    }
-    
-    if (twoVarPlots.includes(plotType) && columns.length < 2) {
-        alert('Please select 2 columns for this plot type');
+    if (twoVarPlots.includes(plotType) && !yColumn) {
+        alert('Please select Y axis column for this plot type');
         return;
     }
     
-    if (threeVarPlots.includes(plotType) && columns.length < 3) {
-        alert('Please select 3 columns for this plot type');
+    if (threeVarPlots.includes(plotType) && (!yColumn || !colorColumn)) {
+        alert('Please select Y axis and Color/Size column for this plot type');
         return;
     }
     
@@ -687,10 +854,11 @@ async function generateCustomPlot() {
             body: JSON.stringify({
                 job_id: state.jobId,
                 plot_type: plotType,
-                x_column: columns[0],
-                y_column: columns[1] || null,
-                color_column: columns[2] || null,
-                columns: columns
+                x_column: xColumn,
+                y_column: yColumn || null,
+                color_column: colorColumn || null,
+                columns: [xColumn, yColumn, colorColumn].filter(Boolean),
+                options: options
             })
         });
         
@@ -700,11 +868,82 @@ async function generateCustomPlot() {
         
         const plotData = await response.json();
         
+        // Check if it's a word cloud image
+        if (plotData.is_image && plotData.image_base64) {
+            elements.customPlotArea.innerHTML = `
+                <div style="text-align: center; padding: 20px;">
+                    <h3 style="color: var(--text-primary); margin-bottom: 15px;">Word Cloud: ${escapeHtml(xColumn)}</h3>
+                    <img src="data:image/png;base64,${plotData.image_base64}" 
+                         alt="Word Cloud" 
+                         style="max-width: 100%; height: auto; border-radius: 8px;">
+                </div>
+            `;
+            return;
+        }
+        
+        // Apply custom options to layout
+        const customLayout = { ...PLOTLY_LAYOUT, ...plotData.plot_layout };
+        
+        // Apply user customizations
+        if (options.customTitle) {
+            customLayout.title = options.customTitle;
+        }
+        
+        if (options.xRange.min !== null || options.xRange.max !== null) {
+            customLayout.xaxis = customLayout.xaxis || {};
+            customLayout.xaxis.range = [
+                options.xRange.min ?? customLayout.xaxis.range?.[0],
+                options.xRange.max ?? customLayout.xaxis.range?.[1]
+            ].filter(v => v !== undefined);
+            if (customLayout.xaxis.range.length === 0) delete customLayout.xaxis.range;
+        }
+        
+        if (options.yRange.min !== null || options.yRange.max !== null) {
+            customLayout.yaxis = customLayout.yaxis || {};
+            customLayout.yaxis.range = [
+                options.yRange.min ?? customLayout.yaxis.range?.[0],
+                options.yRange.max ?? customLayout.yaxis.range?.[1]
+            ].filter(v => v !== undefined);
+            if (customLayout.yaxis.range.length === 0) delete customLayout.yaxis.range;
+        }
+        
+        if (options.xTick) {
+            customLayout.xaxis = customLayout.xaxis || {};
+            customLayout.xaxis.dtick = options.xTick;
+        }
+        
+        if (options.yTick) {
+            customLayout.yaxis = customLayout.yaxis || {};
+            customLayout.yaxis.dtick = options.yTick;
+        }
+        
+        if (options.scaleType === 'log') {
+            customLayout.yaxis = customLayout.yaxis || {};
+            customLayout.yaxis.type = 'log';
+        }
+        
+        if (!options.showGrid) {
+            customLayout.xaxis = customLayout.xaxis || {};
+            customLayout.yaxis = customLayout.yaxis || {};
+            customLayout.xaxis.showgrid = false;
+            customLayout.yaxis.showgrid = false;
+        }
+        
+        // Apply marker customizations to data
+        const customData = plotData.plot_data.map(trace => {
+            if (trace.marker) {
+                trace.marker.size = options.markerSize;
+                trace.marker.opacity = options.opacity;
+            }
+            if (trace.opacity !== undefined) {
+                trace.opacity = options.opacity;
+            }
+            return trace;
+        });
+        
         // Render the plot
         elements.customPlotArea.innerHTML = '<div id="custom-plot-render" style="width: 100%; height: 500px;"></div>';
-        
-        const layout = { ...PLOTLY_LAYOUT, ...plotData.plot_layout };
-        Plotly.newPlot('custom-plot-render', plotData.plot_data, layout, PLOTLY_CONFIG);
+        Plotly.newPlot('custom-plot-render', customData, customLayout, PLOTLY_CONFIG);
         
     } catch (error) {
         console.error('Generate error:', error);
@@ -745,6 +984,106 @@ function setupTabs() {
 }
 
 // ============================
+// State Reset
+// ============================
+
+function clearPreviousResults() {
+    // Clear state (but keep files)
+    state.jobId = null;
+    state.results = null;
+    state.columns = [];
+    state.selectedPlotColumn = null;
+    state.customSelectedColumns = [];
+    
+    // Clear results UI
+    if (elements.summaryText) elements.summaryText.textContent = '';
+    if (elements.insightsList) elements.insightsList.innerHTML = '';
+    if (elements.limitationsList) elements.limitationsList.innerHTML = '';
+    
+    // Clear data table
+    if (elements.dataTable) {
+        const thead = elements.dataTable.querySelector('thead');
+        const tbody = elements.dataTable.querySelector('tbody');
+        if (thead) thead.innerHTML = '';
+        if (tbody) tbody.innerHTML = '';
+    }
+    
+    // Clear columns grid
+    if (elements.columnsGrid) elements.columnsGrid.innerHTML = '';
+    
+    // Clear plots tab
+    if (elements.plotsColumnSelector) elements.plotsColumnSelector.innerHTML = '';
+    if (elements.plotsDisplay) {
+        elements.plotsDisplay.innerHTML = '';
+        elements.plotsDisplay.classList.remove('active');
+    }
+    
+    // Clear custom plot builder dropdowns
+    if (elements.xAxisSelect) {
+        elements.xAxisSelect.innerHTML = '<option value="">-- Select column --</option>';
+    }
+    if (elements.yAxisSelect) {
+        elements.yAxisSelect.innerHTML = '<option value="">-- None --</option>';
+    }
+    if (elements.colorAxisSelect) {
+        elements.colorAxisSelect.innerHTML = '<option value="">-- None --</option>';
+    }
+    
+    // Reset plot options
+    if (elements.plotOptionsSection) elements.plotOptionsSection.style.display = 'none';
+    if (elements.aiSuggestionBox) elements.aiSuggestionBox.classList.add('hidden');
+    if (elements.aiSuggestionText) elements.aiSuggestionText.textContent = '';
+    
+    // Reset custom plot area
+    if (elements.customPlotArea) {
+        elements.customPlotArea.innerHTML = `
+            <div class="plot-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                    <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+                <p>Select columns and plot type, then click Generate</p>
+            </div>
+        `;
+    }
+    
+    // Uncheck all plot type radios
+    document.querySelectorAll('input[name="plot-type"]').forEach(radio => {
+        radio.checked = false;
+    });
+    
+    // Reset tabs to first tab
+    elements.tabBtns.forEach(btn => btn.classList.remove('active'));
+    document.querySelector('.tab-btn[data-tab="data"]')?.classList.add('active');
+    document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+    document.getElementById('data-tab')?.classList.add('active');
+    
+    // Clear any Plotly plots to free memory
+    const plotContainers = document.querySelectorAll('[id^="col-plot-"], [id^="auto-plot-"], #custom-plot-render');
+    plotContainers.forEach(container => {
+        if (container && typeof Plotly !== 'undefined') {
+            Plotly.purge(container);
+        }
+    });
+}
+
+function resetAppState() {
+    // Clear all results first
+    clearPreviousResults();
+    
+    // Also clear file inputs
+    state.csvFile = null;
+    state.schemaFile = null;
+    
+    elements.csvZone.classList.remove('has-file');
+    elements.schemaZone.classList.remove('has-file');
+    elements.csvFilename.textContent = '';
+    elements.schemaFilename.textContent = '';
+    elements.csvInput.value = '';
+    elements.schemaInput.value = '';
+    updateAnalyzeButton();
+}
+
+// ============================
 // Utilities
 // ============================
 
@@ -759,30 +1098,31 @@ function escapeHtml(text) {
 // ============================
 
 function init() {
+    console.log('Initializing EDA Insights...');
+    
+    // Check if all elements exist
+    console.log('Elements check:');
+    console.log('- csvZone:', elements.csvZone);
+    console.log('- analyzeBtn:', elements.analyzeBtn);
+    
     // Setup file uploads
     setupFileUpload(elements.csvZone, elements.csvInput, elements.csvFilename, 'csv');
     setupFileUpload(elements.schemaZone, elements.schemaInput, elements.schemaFilename, 'schema');
     
     // Analyze button
-    elements.analyzeBtn.addEventListener('click', uploadAndAnalyze);
+    if (elements.analyzeBtn) {
+        elements.analyzeBtn.addEventListener('click', () => {
+            console.log('Analyze button clicked!');
+            uploadAndAnalyze();
+        });
+        console.log('Analyze button listener attached');
+    } else {
+        console.error('Analyze button not found!');
+    }
     
     // Back button
     elements.backBtn.addEventListener('click', () => {
-        state.csvFile = null;
-        state.schemaFile = null;
-        state.jobId = null;
-        state.results = null;
-        state.selectedPlotColumn = null;
-        state.customSelectedColumns = [];
-        
-        elements.csvZone.classList.remove('has-file');
-        elements.schemaZone.classList.remove('has-file');
-        elements.csvFilename.textContent = '';
-        elements.schemaFilename.textContent = '';
-        elements.csvInput.value = '';
-        elements.schemaInput.value = '';
-        updateAnalyzeButton();
-        
+        resetAppState();
         showScreen('upload-screen');
     });
     
