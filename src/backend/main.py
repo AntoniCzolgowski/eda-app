@@ -107,7 +107,26 @@ async def upload_file(
     
     try:
         content = await file.read()
-        df = pd.read_csv(pd.io.common.BytesIO(content))
+
+        # Common missing value codes to detect
+        MISSING_VALUES = [
+            '', ' ', '  ',                          # Empty strings
+            'NA', 'N/A', 'n/a', '#N/A',             # NA variants
+            'NULL', 'null', 'Null',                  # NULL variants
+            'None', 'none', 'NONE',                  # None variants
+            'NaN', 'nan', 'NAN',                     # NaN variants
+            'missing', 'Missing', 'MISSING',         # Missing variants
+            'unknown', 'Unknown', 'UNKNOWN',         # Unknown variants
+            'undefined', 'Undefined',                # Undefined
+            '-', '.', '?',                           # Single char placeholders
+            '-999', '-9999', '999', '9999', '-1',    # Numeric codes
+        ]
+
+        # Try UTF-8 first, fallback to latin-1 for non-UTF-8 files
+        try:
+            df = pd.read_csv(pd.io.common.BytesIO(content), encoding='utf-8', na_values=MISSING_VALUES, keep_default_na=True)
+        except UnicodeDecodeError:
+            df = pd.read_csv(pd.io.common.BytesIO(content), encoding='latin-1', na_values=MISSING_VALUES, keep_default_na=True)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {str(e)}")
     

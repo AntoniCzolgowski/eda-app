@@ -1,6 +1,7 @@
 """
 Data analysis logic - column detection and statistics computation
 Enhanced with better date and ID detection
+Updated: No row limit - returns full dataset
 """
 import pandas as pd
 import numpy as np
@@ -486,7 +487,8 @@ def analyze_dataset(df: pd.DataFrame) -> dict[str, Any]:
         col_analysis = analyze_column(df, column)
         columns_analysis.append(col_analysis)
     
-    preview_data = clean_preview_data(df.head(100).values.tolist())
+    # Return ALL data, no limit
+    preview_data = clean_preview_data(df.values.tolist())
     
     return {
         "dataset_info": {

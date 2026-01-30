@@ -1,6 +1,7 @@
 """
 LLM Service - Claude Haiku integration for data analysis insights
 Fixed JSON parsing with proper sanitization
+Shorter, bullet-point summaries
 """
 import os
 import json
@@ -212,7 +213,7 @@ DATASET CHARACTERISTICS:
             clean_schema = sanitize_for_json(schema_content[:2000])
             schema_section = f"\n\nSCHEMA/DESCRIPTION PROVIDED BY USER:\n{clean_schema}\n"
         
-        prompt = f"""You are an expert data analyst providing a comprehensive exploratory data analysis report. Analyze this dataset thoroughly:
+        prompt = f"""You are an expert data analyst. Analyze this dataset and provide a CONCISE summary.
 
 FILENAME: {dataset_info.get('filename', 'unknown')}
 {characteristics}
@@ -221,41 +222,47 @@ DETAILED COLUMN INFORMATION:
 {columns_text}
 {schema_section}
 
-Provide your analysis in the following JSON format. Be COMPREHENSIVE and SPECIFIC:
+Provide your analysis in JSON format with SHORT, POWERFUL bullet points:
 
 {{
-    "summary": "Write 2 full paragraphs of flowing prose. Paragraph 1: Describe what this dataset contains, what each record represents, key variables. Paragraph 2: Describe data quality, notable distributions, preprocessing needs. Use plain text only, no special formatting.",
+    "summary": [
+        "Bullet 1: What this dataset is (one short sentence)",
+        "Bullet 2: Key numeric insight with actual numbers",
+        "Bullet 3: Key categorical insight",
+        "Bullet 4: Data quality note if relevant",
+        "Bullet 5: Most important pattern or finding"
+    ],
     
     "insights": [
-        "INSIGHT 1: Specific finding about data distribution with actual numbers",
-        "INSIGHT 2: Finding about relationships or patterns between variables",
-        "INSIGHT 3: Data quality observation with specific columns affected",
-        "INSIGHT 4: Outlier or anomaly finding with numbers",
-        "INSIGHT 5: Business or domain insight from the data",
-        "INSIGHT 6: Recommendation for analysis approach",
-        "INSIGHT 7: Notable statistic or surprising finding"
+        "Column X: ranges 0-100, mean 45, high variance",
+        "Column Y: 85% values are category A",
+        "Strong correlation suspected between X and Z",
+        "15% missing data in critical columns",
+        "Outliers detected in numeric fields"
     ],
     
     "limitations": [
-        "LIMITATION 1: Specific data quality issue and its impact",
-        "LIMITATION 2: Coverage or sampling limitation",
-        "LIMITATION 3: What questions this data cannot answer"
+        "Missing values in X, Y columns need handling",
+        "Cannot determine causation from this data",
+        "Sample may not be representative"
     ]
 }}
 
-CRITICAL FORMATTING RULES:
-- Output ONLY valid JSON, no markdown, no code blocks
-- Use plain ASCII text only - no special characters, no unicode
-- Do not use actual newlines inside string values - write as continuous text
-- Each insight and limitation should be a single line of text
-- Keep text simple and avoid quotation marks within strings
+CRITICAL RULES:
+- Summary: MAX 10 bullet points, each under 15 words
+- Each bullet is a standalone fact, not a sentence fragment
+- Use actual numbers from the data
+- No fluff words, no "the data shows", just facts
+- Insights: 5-7 specific findings with numbers
+- Limitations: 2-3 concrete issues
+- Output ONLY valid JSON, no markdown
 
-Respond with the JSON object only."""
+Respond with JSON only."""
 
         try:
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=2000,
+                max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}]
             )
             
@@ -266,9 +273,11 @@ Respond with the JSON object only."""
             
             # Sanitize all string values in result
             if 'summary' in result:
-                result['summary'] = sanitize_for_json(result['summary'])
-                # Add paragraph break for display
-                result['summary'] = result['summary'].replace('Paragraph 2:', '\n\n')
+                if isinstance(result['summary'], list):
+                    result['summary'] = [sanitize_for_json(str(s)) for s in result['summary']]
+                else:
+                    # If it's a string, convert to list
+                    result['summary'] = [sanitize_for_json(str(result['summary']))]
             
             if 'insights' in result:
                 result['insights'] = [sanitize_for_json(str(i)) for i in result['insights']]
@@ -360,24 +369,32 @@ Respond in JSON only, no markdown:
         missing_cols = [c for c in columns if c['missing'] > 0]
         flagged_cols = [c for c in columns if c.get('quality_flags')]
         
-        # Build comprehensive summary
-        summary_p1 = f"This dataset contains {dataset_info['rows']:,} records across {dataset_info['columns']} columns. "
-        summary_p1 += f"The data includes {len(numeric_cols)} numeric variables suitable for statistical analysis, "
-        summary_p1 += f"{len(cat_cols)} categorical variables for grouping and segmentation"
-        if text_cols:
-            summary_p1 += f", and {len(text_cols)} text fields containing unstructured data"
-        summary_p1 += ". Each record appears to represent a distinct observation or entity in the dataset."
+        # Build concise bullet-point summary
+        summary = [
+            f"{dataset_info['rows']:,} records, {dataset_info['columns']} columns",
+            f"{len(numeric_cols)} numeric, {len(cat_cols)} categorical, {len(text_cols)} text columns"
+        ]
         
-        summary_p2 = f"Data quality assessment reveals that {len(missing_cols)} columns contain missing values that may require imputation or careful handling. "
+        if missing_cols:
+            worst = max(missing_cols, key=lambda x: x['missing_pct'])
+            summary.append(f"{len(missing_cols)} columns have missing values (worst: {worst['name']} at {worst['missing_pct']}%)")
+        
+        if numeric_cols and numeric_cols[0].get('stats'):
+            col = numeric_cols[0]
+            stats = col['stats']
+            if 'mean' in stats:
+                summary.append(f"{col['name']}: range {stats.get('min')}-{stats.get('max')}, mean {stats.get('mean'):.1f}")
+        
+        if cat_cols and cat_cols[0].get('stats', {}).get('top_values'):
+            col = cat_cols[0]
+            top = col['stats']['top_values'][0]
+            summary.append(f"{col['name']}: {col['stats']['unique_count']} categories, top is '{top['value']}' ({top['percent']}%)")
+        
         if flagged_cols:
-            flags = []
+            flags = set()
             for c in flagged_cols:
-                flags.extend(c.get('quality_flags', []))
-            summary_p2 += f"Quality flags have been raised for {len(flagged_cols)} columns, including issues such as: {', '.join(set(flags))}. "
-        summary_p2 += "The numeric variables show varying distributions that should be explored through visualization before modeling. "
-        summary_p2 += "This dataset appears suitable for exploratory analysis, statistical testing, and potentially predictive modeling depending on the target variable."
-        
-        summary = f"{summary_p1}\n\n{summary_p2}"
+                flags.update(c.get('quality_flags', []))
+            summary.append(f"Quality flags: {', '.join(flags)}")
         
         # Build meaningful insights
         insights = []
@@ -386,36 +403,31 @@ Respond in JSON only, no markdown:
             col = numeric_cols[0]
             if col.get('stats') and 'mean' in col['stats']:
                 stats = col['stats']
-                insights.append(f"The column '{col['name']}' ranges from {stats.get('min')} to {stats.get('max')} with a mean of {stats.get('mean'):.2f} and standard deviation of {stats.get('std'):.2f}, indicating {'high' if stats.get('std', 0) > stats.get('mean', 1) else 'moderate'} variability in the data.")
+                outliers = stats.get('outliers_low', 0) + stats.get('outliers_high', 0)
+                insights.append(f"{col['name']}: {stats.get('min')} to {stats.get('max')}, std={stats.get('std'):.2f}, {outliers} outliers")
         
         if cat_cols:
-            insights.append(f"Found {len(cat_cols)} categorical columns ({', '.join([c['name'] for c in cat_cols[:3]])}) that can be used for grouping, stratification, or as features in classification models.")
+            insights.append(f"{len(cat_cols)} categorical columns for grouping/segmentation")
         
         if missing_cols:
-            worst = max(missing_cols, key=lambda x: x['missing_pct'])
-            insights.append(f"Missing data is present in {len(missing_cols)} columns. The most affected is '{worst['name']}' with {worst['missing_pct']}% missing values - consider imputation strategies or exclusion depending on analysis goals.")
+            insights.append(f"{len(missing_cols)} columns need missing value treatment")
         
-        if flagged_cols:
-            for c in flagged_cols[:2]:
-                if 'single_value' in c.get('quality_flags', []):
-                    insights.append(f"Column '{c['name']}' contains only a single unique value and provides no discriminative information - recommend removing from analysis.")
-                if 'potential_id' in c.get('quality_flags', []):
-                    insights.append(f"Column '{c['name']}' appears to be an identifier column with high cardinality - should be excluded from statistical modeling but may be useful for record tracking.")
+        for c in flagged_cols[:2]:
+            if 'single_value' in c.get('quality_flags', []):
+                insights.append(f"{c['name']}: single value only - remove from analysis")
+            if 'potential_id' in c.get('quality_flags', []):
+                insights.append(f"{c['name']}: appears to be ID column")
         
-        insights.append(f"Dataset has {dataset_info['rows']:,} observations which is {'sufficient' if dataset_info['rows'] > 100 else 'limited'} for most statistical analyses and machine learning approaches.")
-        
-        # Pad to minimum 5 insights
-        while len(insights) < 5:
-            insights.append("Further domain-specific analysis recommended to uncover deeper patterns and relationships in the data.")
+        insights.append(f"Dataset size: {'sufficient' if dataset_info['rows'] > 100 else 'limited'} for statistical analysis")
         
         limitations = [
-            f"Automated analysis may miss domain-specific patterns - recommend consulting with subject matter experts familiar with this type of data.",
-            f"Statistical relationships identified do not imply causation - experimental design or causal inference methods needed for causal claims.",
-            f"Results should be validated on held-out data before deployment, and any derived insights verified against external sources when possible."
+            "Automated analysis - verify with domain expertise",
+            "Correlation does not imply causation",
+            "Validate findings on held-out data"
         ]
         
         return {
-            "summary": summary,
+            "summary": summary[:10],  # Max 10 bullets
             "insights": insights[:7],
             "limitations": limitations
         }
@@ -430,14 +442,14 @@ Respond in JSON only, no markdown:
                     "plot_type": "histogram",
                     "x_column": col['name'],
                     "y_column": None,
-                    "reasoning": f"For the single numeric column '{col['name']}', a histogram shows the distribution. Consider adding another numeric column to create a scatter plot, or a categorical column for grouped comparisons."
+                    "reasoning": f"Histogram shows distribution of numeric column '{col['name']}'."
                 }
             else:
                 return {
                     "plot_type": "bar",
                     "x_column": col['name'],
                     "y_column": None,
-                    "reasoning": f"For the categorical column '{col['name']}', a bar chart shows frequency counts. Consider adding a numeric column to see averages by category."
+                    "reasoning": f"Bar chart shows frequency of categorical column '{col['name']}'."
                 }
         
         elif len(columns) == 2:
@@ -449,21 +461,21 @@ Respond in JSON only, no markdown:
                     "plot_type": "scatter",
                     "x_column": numeric_cols[0]['name'],
                     "y_column": numeric_cols[1]['name'],
-                    "reasoning": f"A scatter plot reveals the relationship between '{numeric_cols[0]['name']}' and '{numeric_cols[1]['name']}'. Add a third categorical column for color-coding by groups."
+                    "reasoning": f"Scatter plot shows relationship between two numeric variables."
                 }
             elif len(numeric_cols) == 1 and len(cat_cols) == 1:
                 return {
                     "plot_type": "grouped_bar",
                     "x_column": cat_cols[0]['name'],
                     "y_column": numeric_cols[0]['name'],
-                    "reasoning": f"A grouped bar chart shows average '{numeric_cols[0]['name']}' across categories of '{cat_cols[0]['name']}'."
+                    "reasoning": f"Grouped bar shows {numeric_cols[0]['name']} by {cat_cols[0]['name']}."
                 }
             elif len(cat_cols) == 2:
                 return {
                     "plot_type": "heatmap_cat",
                     "x_column": cat_cols[0]['name'],
                     "y_column": cat_cols[1]['name'],
-                    "reasoning": f"A heatmap shows the frequency distribution across both categorical variables '{cat_cols[0]['name']}' and '{cat_cols[1]['name']}'."
+                    "reasoning": f"Heatmap shows frequency across two categorical variables."
                 }
         
         elif len(columns) >= 3:
@@ -474,14 +486,14 @@ Respond in JSON only, no markdown:
                     "plot_type": "scatter_color",
                     "x_column": numeric_cols[0]['name'],
                     "y_column": numeric_cols[1]['name'],
-                    "reasoning": f"With 3+ variables, a colored scatter plot shows '{numeric_cols[0]['name']}' vs '{numeric_cols[1]['name']}' with color representing '{numeric_cols[2]['name']}'. For an overview of all relationships, try the correlation matrix."
+                    "reasoning": f"Colored scatter shows 3 numeric variables simultaneously."
                 }
             elif len(numeric_cols) >= 2:
                 return {
                     "plot_type": "correlation",
                     "x_column": columns[0]['name'],
                     "y_column": columns[1]['name'],
-                    "reasoning": "A correlation matrix shows relationships between all numeric variables at once."
+                    "reasoning": "Correlation matrix shows all numeric relationships."
                 }
         
         # Default fallback
@@ -489,5 +501,5 @@ Respond in JSON only, no markdown:
             "plot_type": "histogram",
             "x_column": columns[0]['name'],
             "y_column": None,
-            "reasoning": "Starting with a histogram to explore the distribution of the first selected variable."
+            "reasoning": "Starting with histogram to explore distribution."
         }

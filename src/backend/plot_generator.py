@@ -1,6 +1,7 @@
 """
 Plot Generator - Creates Plotly visualizations for data analysis
 Enhanced with aggregations, Y-axis scaling, categorical heatmaps, and fixed 3-var plots
+Updated: limit 100 categories, show_all option, dynamic width for scrolling
 """
 import pandas as pd
 import numpy as np
@@ -28,6 +29,12 @@ class PlotGenerator:
     
     # Threshold for treating numeric as categorical
     LOW_CARDINALITY_THRESHOLD = 5
+    
+    # Default category limit (can be overridden with show_all)
+    DEFAULT_CATEGORY_LIMIT = 100
+    
+    # Minimum bar width in pixels
+    MIN_BAR_WIDTH = 25
     
     # Supported aggregation functions
     AGGREGATIONS = {
@@ -104,6 +111,22 @@ class PlotGenerator:
             layout['yaxis']['type'] = 'log'
         
         return layout
+    
+    def _get_category_limit(self, options: dict) -> int:
+        """Get category limit from options, or default"""
+        if options and options.get('showAll'):
+            return 99999  # Effectively no limit
+        return self.DEFAULT_CATEGORY_LIMIT
+    
+    def _calculate_dynamic_width(self, num_categories: int, num_groups: int = 1) -> Optional[int]:
+        """Calculate dynamic width for charts with many categories"""
+        # Calculate minimum width needed
+        min_width = num_categories * self.MIN_BAR_WIDTH * max(num_groups, 1)
+        
+        # Only return custom width if it exceeds standard chart width
+        if min_width > 800:
+            return max(min_width, 800)
+        return None
     
     def generate_auto_plots(self, df: pd.DataFrame, columns: list[dict]) -> dict[str, list]:
         """Generate automatic plots for all suitable columns"""
@@ -232,7 +255,9 @@ class PlotGenerator:
         
         return {
             "plot_data": plot.get("data", []),
-            "plot_layout": plot.get("layout", {})
+            "plot_layout": plot.get("layout", {}),
+            "total_categories": plot.get("total_categories"),
+            "showing_categories": plot.get("showing_categories")
         }
     
     def _create_histogram(self, df: pd.DataFrame, column: str, bin_count: int = 20, options: dict = None) -> dict[str, Any]:
@@ -311,7 +336,10 @@ class PlotGenerator:
             if len(df_clean) == 0:
                 return None
             
-            categories = df_clean[cat_col].unique()[:15]  # Limit categories
+            limit = self._get_category_limit(options)
+            all_categories = df_clean[cat_col].unique()
+            total_categories = len(all_categories)
+            categories = all_categories[:limit]
             
             traces = []
             for i, cat in enumerate(categories):
@@ -324,18 +352,27 @@ class PlotGenerator:
                     "boxpoints": "outliers"
                 })
             
+            # Calculate dynamic width
+            dynamic_width = self._calculate_dynamic_width(len(categories))
+            
             layout = {
                 "title": f"Distribution of {num_col} by {cat_col}",
                 "yaxis": {"title": num_col},
                 "xaxis": {"title": cat_col}
             }
             
+            if dynamic_width:
+                layout["width"] = dynamic_width
+                layout["xaxis"]["tickangle"] = -45
+            
             if options:
                 layout = self._apply_y_axis_options(layout, options)
             
             return {
                 "data": traces,
-                "layout": layout
+                "layout": layout,
+                "total_categories": total_categories,
+                "showing_categories": len(categories)
             }
         except Exception as e:
             print(f"Grouped boxplot error: {e}")
@@ -377,13 +414,17 @@ class PlotGenerator:
     def _create_bar_chart(self, df: pd.DataFrame, column: str, value_col: str = None, agg_func: str = None, options: dict = None) -> dict[str, Any]:
         """Create a bar chart for categorical data with optional aggregation"""
         try:
+            limit = self._get_category_limit(options)
+            
             if value_col and agg_func:
                 # Aggregated bar chart
                 agg_data = self._apply_aggregation(df, [column], value_col, agg_func)
                 agg_col = agg_data.columns[-1]  # The aggregated column
                 
-                # Sort by aggregated value and limit
-                agg_data = agg_data.nlargest(15, agg_col)
+                # Sort by aggregated value
+                agg_data = agg_data.sort_values(agg_col, ascending=False)
+                total_categories = len(agg_data)
+                agg_data = agg_data.head(limit)
                 
                 x_vals = [str(x) for x in agg_data[column].tolist()]
                 y_vals = agg_data[agg_col].tolist()
@@ -391,7 +432,9 @@ class PlotGenerator:
                 title = f"{agg_func.upper()} of {value_col} by {column}"
             else:
                 # Simple frequency count
-                value_counts = df[column].value_counts().head(15)
+                value_counts = df[column].value_counts()
+                total_categories = len(value_counts)
+                value_counts = value_counts.head(limit)
                 
                 if len(value_counts) == 0:
                     return None
@@ -401,11 +444,17 @@ class PlotGenerator:
                 y_title = "Count"
                 title = f"Frequency of {column}"
             
+            # Calculate dynamic width
+            dynamic_width = self._calculate_dynamic_width(len(x_vals))
+            
             layout = {
                 "title": title,
                 "xaxis": {"title": column, "tickangle": -45},
                 "yaxis": {"title": y_title}
             }
+            
+            if dynamic_width:
+                layout["width"] = dynamic_width
             
             if options:
                 layout = self._apply_y_axis_options(layout, options)
@@ -417,7 +466,9 @@ class PlotGenerator:
                     "y": y_vals,
                     "marker": {"color": self.COLORS[2]}
                 }],
-                "layout": layout
+                "layout": layout,
+                "total_categories": total_categories,
+                "showing_categories": len(x_vals)
             }
         except Exception as e:
             print(f"Bar chart error for {column}: {e}")
@@ -426,16 +477,22 @@ class PlotGenerator:
     def _create_pie_chart(self, df: pd.DataFrame, column: str, value_col: str = None, agg_func: str = None, options: dict = None) -> dict[str, Any]:
         """Create a pie chart for categorical data"""
         try:
+            # Pie charts should have limited categories for readability
+            pie_limit = min(self._get_category_limit(options), 20)
+            
             if value_col and agg_func:
                 agg_data = self._apply_aggregation(df, [column], value_col, agg_func)
                 agg_col = agg_data.columns[-1]
-                agg_data = agg_data.nlargest(10, agg_col)
+                total_categories = len(agg_data)
+                agg_data = agg_data.nlargest(pie_limit, agg_col)
                 
                 labels = [str(x) for x in agg_data[column].tolist()]
                 values = agg_data[agg_col].tolist()
                 title = f"{agg_func.upper()} of {value_col} by {column}"
             else:
-                value_counts = df[column].value_counts().head(10)
+                value_counts = df[column].value_counts()
+                total_categories = len(value_counts)
+                value_counts = value_counts.head(pie_limit)
                 labels = [str(x) for x in value_counts.index.tolist()]
                 values = value_counts.values.tolist()
                 title = f"Distribution of {column}"
@@ -450,7 +507,9 @@ class PlotGenerator:
                 }],
                 "layout": {
                     "title": title
-                }
+                },
+                "total_categories": total_categories,
+                "showing_categories": len(labels)
             }
         except Exception as e:
             print(f"Pie chart error: {e}")
@@ -574,7 +633,10 @@ class PlotGenerator:
             else:
                 # Categorical color
                 traces = []
-                unique_colors = color_data[mask].unique()[:10]  # Limit to 10 categories
+                limit = self._get_category_limit(options)
+                all_colors = color_data[mask].unique()
+                total_categories = len(all_colors)
+                unique_colors = all_colors[:limit]
                 
                 for i, cat in enumerate(unique_colors):
                     cat_mask = (color_data == cat) & mask
@@ -595,7 +657,9 @@ class PlotGenerator:
                 layout["title"] = f"{x_col} vs {y_col} (by {color_col})"
                 return {
                     "data": traces,
-                    "layout": layout
+                    "layout": layout,
+                    "total_categories": total_categories,
+                    "showing_categories": len(unique_colors)
                 }
         except Exception as e:
             print(f"Colored scatter error: {e}")
@@ -657,16 +721,20 @@ class PlotGenerator:
         """Create a grouped bar chart with optional secondary grouping"""
         try:
             agg_method = agg_func if agg_func else 'mean'
+            limit = self._get_category_limit(options)
             
             if group_col and group_col in df.columns:
                 # Two-level grouping
                 agg_data = self._apply_aggregation(df, [cat_col, group_col], num_col, agg_method)
                 agg_col = agg_data.columns[-1]
                 
-                traces = []
-                groups = agg_data[group_col].unique()[:10]
-                categories = agg_data[cat_col].unique()[:15]
+                all_categories = agg_data[cat_col].unique()
+                total_categories = len(all_categories)
+                categories = all_categories[:limit]
                 
+                groups = agg_data[group_col].unique()[:20]  # Limit groups for legend
+                
+                traces = []
                 for i, grp in enumerate(groups):
                     grp_data = agg_data[agg_data[group_col] == grp]
                     # Ensure all categories are present
@@ -684,20 +752,28 @@ class PlotGenerator:
                     })
                 
                 title = f"{agg_method.upper()} of {num_col} by {cat_col} and {group_col}"
+                num_groups = len(groups)
             else:
                 # Single grouping
                 agg_data = self._apply_aggregation(df, [cat_col], num_col, agg_method)
                 agg_col = agg_data.columns[-1]
-                agg_data = agg_data.head(15)
+                
+                total_categories = len(agg_data)
+                agg_data = agg_data.head(limit)
+                categories = agg_data[cat_col].tolist()
                 
                 traces = [{
                     "type": "bar",
-                    "x": [str(x) for x in agg_data[cat_col].tolist()],
+                    "x": [str(x) for x in categories],
                     "y": agg_data[agg_col].tolist(),
                     "marker": {"color": self.COLORS[4]}
                 }]
                 
                 title = f"{agg_method.upper()} of {num_col} by {cat_col}"
+                num_groups = 1
+            
+            # Calculate dynamic width
+            dynamic_width = self._calculate_dynamic_width(len(categories), num_groups)
             
             layout = {
                 "title": title,
@@ -706,12 +782,17 @@ class PlotGenerator:
                 "barmode": "group"
             }
             
+            if dynamic_width:
+                layout["width"] = dynamic_width
+            
             if options:
                 layout = self._apply_y_axis_options(layout, options)
             
             return {
                 "data": traces,
-                "layout": layout
+                "layout": layout,
+                "total_categories": total_categories,
+                "showing_categories": len(categories)
             }
         except Exception as e:
             print(f"Grouped bar error: {e}")
@@ -721,15 +802,19 @@ class PlotGenerator:
         """Create a stacked bar chart"""
         try:
             agg_method = agg_func if agg_func else 'sum'
+            limit = self._get_category_limit(options)
             
             if stack_col and stack_col in df.columns:
                 agg_data = self._apply_aggregation(df, [cat_col, stack_col], num_col, agg_method)
                 agg_col = agg_data.columns[-1]
                 
-                traces = []
-                stacks = agg_data[stack_col].unique()[:10]
-                categories = agg_data[cat_col].unique()[:15]
+                all_categories = agg_data[cat_col].unique()
+                total_categories = len(all_categories)
+                categories = all_categories[:limit]
                 
+                stacks = agg_data[stack_col].unique()[:20]  # Limit stacks for legend
+                
+                traces = []
                 for i, stk in enumerate(stacks):
                     stk_data = agg_data[agg_data[stack_col] == stk]
                     y_vals = []
@@ -746,8 +831,12 @@ class PlotGenerator:
                     })
                 
                 title = f"Stacked {agg_method.upper()} of {num_col} by {cat_col}"
+                num_groups = len(stacks)
             else:
                 return self._create_bar_chart(df, cat_col, num_col, agg_method, options)
+            
+            # Calculate dynamic width
+            dynamic_width = self._calculate_dynamic_width(len(categories), 1)
             
             layout = {
                 "title": title,
@@ -756,12 +845,17 @@ class PlotGenerator:
                 "barmode": "stack"
             }
             
+            if dynamic_width:
+                layout["width"] = dynamic_width
+            
             if options:
                 layout = self._apply_y_axis_options(layout, options)
             
             return {
                 "data": traces,
-                "layout": layout
+                "layout": layout,
+                "total_categories": total_categories,
+                "showing_categories": len(categories)
             }
         except Exception as e:
             print(f"Stacked bar error: {e}")
@@ -770,6 +864,8 @@ class PlotGenerator:
     def _create_categorical_heatmap(self, df: pd.DataFrame, x_col: str, y_col: str, agg_func: str = None, value_col: str = None, options: dict = None) -> dict[str, Any]:
         """Create a heatmap for two categorical variables"""
         try:
+            limit = self._get_category_limit(options)
+            
             if value_col and agg_func and value_col in df.columns:
                 # Aggregated heatmap
                 pivot = df.pivot_table(
@@ -786,8 +882,24 @@ class PlotGenerator:
                 title = f"Frequency Heatmap: {x_col} vs {y_col}"
                 colorbar_title = "Count"
             
+            # Track total before limiting
+            total_x = len(pivot.columns)
+            total_y = len(pivot.index)
+            
             # Limit dimensions
-            pivot = pivot.iloc[:20, :20]
+            pivot = pivot.iloc[:limit, :limit]
+            
+            # Calculate dynamic width based on number of x categories
+            dynamic_width = self._calculate_dynamic_width(len(pivot.columns))
+            
+            layout = {
+                "title": title,
+                "xaxis": {"title": x_col, "tickangle": -45},
+                "yaxis": {"title": y_col, "autorange": "reversed"}
+            }
+            
+            if dynamic_width:
+                layout["width"] = dynamic_width
             
             return {
                 "data": [{
@@ -802,11 +914,9 @@ class PlotGenerator:
                     "hoverongaps": False,
                     "colorbar": {"title": colorbar_title}
                 }],
-                "layout": {
-                    "title": title,
-                    "xaxis": {"title": x_col, "tickangle": -45},
-                    "yaxis": {"title": y_col, "autorange": "reversed"}
-                }
+                "layout": layout,
+                "total_categories": max(total_x, total_y),
+                "showing_categories": max(len(pivot.columns), len(pivot.index))
             }
         except Exception as e:
             print(f"Categorical heatmap error: {e}")
@@ -815,11 +925,16 @@ class PlotGenerator:
     def _create_line_chart(self, df: pd.DataFrame, x_col: str, y_col: str, agg_func: str = None, options: dict = None) -> dict[str, Any]:
         """Create a line chart with optional aggregation"""
         try:
+            limit = self._get_category_limit(options)
+            
             if agg_func:
                 # Aggregate by x column
                 agg_data = self._apply_aggregation(df, [x_col], y_col, agg_func)
                 agg_col = agg_data.columns[-1]
                 sorted_df = agg_data.sort_values(x_col)
+                
+                total_points = len(sorted_df)
+                sorted_df = sorted_df.head(limit)
                 
                 x_vals = sorted_df[x_col].tolist()
                 y_vals = sorted_df[agg_col].tolist()
@@ -830,15 +945,24 @@ class PlotGenerator:
                 if len(sorted_df) == 0:
                     return None
                 
+                total_points = len(sorted_df)
+                sorted_df = sorted_df.head(limit)
+                
                 x_vals = sorted_df[x_col].tolist()
                 y_vals = sorted_df[y_col].tolist()
                 y_title = y_col
+            
+            # Calculate dynamic width
+            dynamic_width = self._calculate_dynamic_width(len(x_vals))
             
             layout = {
                 "title": f"{y_title} over {x_col}",
                 "xaxis": {"title": x_col},
                 "yaxis": {"title": y_title}
             }
+            
+            if dynamic_width:
+                layout["width"] = dynamic_width
             
             if options:
                 layout = self._apply_y_axis_options(layout, options)
@@ -852,7 +976,9 @@ class PlotGenerator:
                     "line": {"color": self.COLORS[5]},
                     "marker": {"size": 4}
                 }],
-                "layout": layout
+                "layout": layout,
+                "total_categories": total_points,
+                "showing_categories": len(x_vals)
             }
         except Exception as e:
             print(f"Line chart error: {e}")

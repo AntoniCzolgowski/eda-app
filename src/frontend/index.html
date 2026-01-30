@@ -124,7 +124,7 @@
                         </svg>
                         Dataset Summary
                     </h3>
-                    <p id="summary-text" class="summary-text">Loading summary...</p>
+                    <ul id="summary-list" class="summary-list"></ul>
                 </section>
 
                 <section class="panel-section insights-section">
@@ -179,16 +179,27 @@
                 </nav>
 
                 <div class="tab-content">
-                    <!-- Data Tab -->
+                    <!-- Data Tab - Enhanced with filters -->
                     <div id="data-tab" class="tab-pane active">
+                        <div class="data-toolbar">
+                            <div class="data-toolbar-left">
+                                <button id="clear-filters-btn" class="toolbar-btn" title="Clear all filters">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                    </svg>
+                                    Clear Filters
+                                </button>
+                                <span id="filter-status" class="filter-status"></span>
+                            </div>
+                            <div class="data-toolbar-right">
+                                <span id="row-display-count" class="row-count-info">Loading data...</span>
+                            </div>
+                        </div>
                         <div class="data-table-container">
                             <table id="data-table" class="data-table">
                                 <thead></thead>
                                 <tbody></tbody>
                             </table>
-                        </div>
-                        <div class="table-info">
-                            <span>Showing first 100 rows</span>
                         </div>
                     </div>
 
@@ -395,6 +406,11 @@
                                             <label>Bin Count</label>
                                             <input type="number" id="bin-count-input" value="20" min="5" max="100">
                                         </div>
+                                        <div class="option-row" id="show-all-option">
+                                            <label>Show All Categories</label>
+                                            <input type="checkbox" id="show-all-toggle">
+                                            <span class="option-hint" id="category-hint"></span>
+                                        </div>
                                         <div class="option-row" id="x-range-option">
                                             <label>X Axis Range</label>
                                             <div class="range-inputs">
@@ -454,6 +470,12 @@
                                         </svg>
                                         AI Suggest
                                     </button>
+                                    <button id="reset-builder-btn" class="secondary-btn reset-btn">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                                        </svg>
+                                        Reset
+                                    </button>
                                     <button id="generate-custom-btn" class="primary-btn">
                                         Generate Plot
                                     </button>
@@ -478,6 +500,10 @@
                                         </svg>
                                         <p>Select columns and plot type, then click Generate</p>
                                     </div>
+                                </div>
+                                <div id="category-info" class="category-info hidden">
+                                    <span id="category-info-text"></span>
+                                    <button id="show-all-btn" class="show-all-btn">Show All</button>
                                 </div>
                             </div>
                         </div>

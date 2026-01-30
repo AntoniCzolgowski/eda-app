@@ -1,7 +1,7 @@
 /**
  * EDA Insights - Frontend Application
  * Automated Exploratory Data Analysis
- * Enhanced with aggregations, Y-axis scaling, type conversion
+ * Enhanced with multi-value filters (tags), no row limit, OR logic within columns
  */
 
 // ============================
@@ -9,6 +9,9 @@
 // ============================
 
 const API_BASE = 'http://localhost:8000/api';
+
+// Display limit for table rendering (filtering searches ALL data)
+const DISPLAY_LIMIT = 1000;
 
 // Plotly theme configuration
 const PLOTLY_CONFIG = {
@@ -25,14 +28,16 @@ const PLOTLY_LAYOUT = {
         family: 'DM Sans, sans-serif',
         color: '#8b949e'
     },
-    margin: { t: 40, r: 20, b: 40, l: 50 },
+    margin: { t: 40, r: 20, b: 100, l: 50 },
     xaxis: {
         gridcolor: 'rgba(48,54,61,0.6)',
-        zerolinecolor: 'rgba(48,54,61,0.8)'
+        zerolinecolor: 'rgba(48,54,61,0.8)',
+        automargin: true
     },
     yaxis: {
         gridcolor: 'rgba(48,54,61,0.6)',
-        zerolinecolor: 'rgba(48,54,61,0.8)'
+        zerolinecolor: 'rgba(48,54,61,0.8)',
+        automargin: true
     }
 };
 
@@ -60,7 +65,16 @@ const state = {
     results: null,
     columns: [],
     selectedPlotColumn: null,
-    customSelectedColumns: []
+    customSelectedColumns: [],
+    // Data table state
+    fullData: [],
+    filteredData: [],
+    // Filters: { columnIdx: [value1, value2, ...] } - array of values per column
+    filters: {},
+    sortColumn: null,
+    sortDirection: 'asc',
+    // Plot state
+    lastPlotResult: null
 };
 
 // ============================
@@ -94,7 +108,7 @@ const elements = {
     colCount: document.getElementById('col-count'),
     
     // Left Panel
-    summaryText: document.getElementById('summary-text'),
+    summaryList: document.getElementById('summary-list'),
     insightsList: document.getElementById('insights-list'),
     limitationsList: document.getElementById('limitations-list'),
     
@@ -107,6 +121,9 @@ const elements = {
     
     // Data Table
     dataTable: document.getElementById('data-table'),
+    clearFiltersBtn: document.getElementById('clear-filters-btn'),
+    filterStatus: document.getElementById('filter-status'),
+    rowDisplayCount: document.getElementById('row-display-count'),
     
     // Columns
     columnsGrid: document.getElementById('columns-grid'),
@@ -123,6 +140,8 @@ const elements = {
     plotOptionsSection: document.getElementById('plot-options-section'),
     binSizeOption: document.getElementById('bin-size-option'),
     binCountInput: document.getElementById('bin-count-input'),
+    showAllToggle: document.getElementById('show-all-toggle'),
+    categoryHint: document.getElementById('category-hint'),
     xMinInput: document.getElementById('x-min-input'),
     xMaxInput: document.getElementById('x-max-input'),
     yMinInput: document.getElementById('y-min-input'),
@@ -137,10 +156,14 @@ const elements = {
     gridToggle: document.getElementById('grid-toggle'),
     customTitleInput: document.getElementById('custom-title-input'),
     llmSuggestBtn: document.getElementById('llm-suggest-btn'),
+    resetBuilderBtn: document.getElementById('reset-builder-btn'),
     generateCustomBtn: document.getElementById('generate-custom-btn'),
     aiSuggestionBox: document.getElementById('ai-suggestion-box'),
     aiSuggestionText: document.getElementById('ai-suggestion-text'),
-    customPlotArea: document.getElementById('custom-plot-area')
+    customPlotArea: document.getElementById('custom-plot-area'),
+    categoryInfo: document.getElementById('category-info'),
+    categoryInfoText: document.getElementById('category-info-text'),
+    showAllBtn: document.getElementById('show-all-btn')
 };
 
 // ============================
@@ -341,6 +364,13 @@ async function fetchResults() {
     state.results = await response.json();
     state.columns = state.results.columns;
     
+    // Store full data for filtering - ALL rows, no limit
+    state.fullData = state.results.data_preview || [];
+    state.filteredData = [...state.fullData];
+    state.filters = {};
+    state.sortColumn = null;
+    state.sortDirection = 'asc';
+    
     renderResults();
     showScreen('results-screen');
 }
@@ -373,15 +403,25 @@ function renderResults() {
     renderLimitations(results.llm_analysis.limitations);
     
     // Tabs
-    renderDataPreview(results.columns, results.data_preview);
+    renderDataPreview(results.columns, state.filteredData);
     renderColumnsGrid(results.columns);
     renderPlotsColumnSelector(results.columns, results.plots);
     setupCustomBuilder(results.columns);
 }
 
 function renderSummary(llmAnalysis) {
-    const summary = llmAnalysis.summary || 'No summary available.';
-    elements.summaryText.textContent = summary;
+    const summary = llmAnalysis.summary;
+    
+    // Handle both array (new format) and string (old format)
+    if (Array.isArray(summary)) {
+        elements.summaryList.innerHTML = summary
+            .map(item => `<li>${escapeHtml(item)}</li>`)
+            .join('');
+    } else {
+        // Old string format - split into bullets or show as single item
+        const text = summary || 'No summary available.';
+        elements.summaryList.innerHTML = `<li>${escapeHtml(text)}</li>`;
+    }
 }
 
 function renderInsights(insights) {
@@ -396,30 +436,303 @@ function renderLimitations(limitations) {
         .join('');
 }
 
+// ============================
+// Data Table with Multi-Value Filtering & Sorting
+// ============================
+
 function renderDataPreview(columns, data) {
     const thead = elements.dataTable.querySelector('thead');
     const tbody = elements.dataTable.querySelector('tbody');
     
-    thead.innerHTML = `<tr>${columns.map(col => 
-        `<th>${escapeHtml(col.name)}</th>`
-    ).join('')}</tr>`;
+    // Build header with filter inputs (multi-value tags)
+    thead.innerHTML = `
+        <tr class="header-row">
+            ${columns.map((col, idx) => `
+                <th data-column="${idx}">
+                    <div class="th-content">
+                        <span class="col-name" onclick="toggleSort(${idx})">${escapeHtml(col.name)}</span>
+                        <span class="sort-icon" id="sort-icon-${idx}"></span>
+                    </div>
+                </th>
+            `).join('')}
+        </tr>
+        <tr class="filter-row">
+            ${columns.map((col, idx) => `
+                <th>
+                    <div class="filter-cell" id="filter-cell-${idx}">
+                        <div class="filter-tags" id="filter-tags-${idx}"></div>
+                        <div class="filter-input-wrapper">
+                            <input type="text" 
+                                   class="filter-input" 
+                                   id="filter-input-${idx}"
+                                   data-column="${idx}" 
+                                   placeholder="Filter..." 
+                                   onkeydown="handleFilterKeydown(event, ${idx})">
+                            <button class="filter-add-btn" onclick="addFilterFromInput(${idx})" title="Add filter">+</button>
+                        </div>
+                    </div>
+                </th>
+            `).join('')}
+        </tr>
+    `;
     
-    tbody.innerHTML = data.slice(0, 100).map(row => 
+    // Render body - ALL rows
+    renderTableBody(data);
+    
+    // Update display count
+    updateRowDisplayCount();
+}
+
+function renderTableBody(data) {
+    const tbody = elements.dataTable.querySelector('tbody');
+    
+    // Apply display limit for rendering (filtering still uses ALL data)
+    const displayData = data.slice(0, DISPLAY_LIMIT);
+    
+    tbody.innerHTML = displayData.map(row => 
         `<tr>${row.map(cell => 
             `<td>${formatCell(cell)}</td>`
         ).join('')}</tr>`
     ).join('');
 }
 
+function handleFilterKeydown(event, columnIdx) {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        addFilterFromInput(columnIdx);
+    }
+}
+
+function addFilterFromInput(columnIdx) {
+    const input = document.getElementById(`filter-input-${columnIdx}`);
+    const value = input.value.trim();
+    
+    if (!value) return;
+    
+    // Initialize array if needed
+    if (!state.filters[columnIdx]) {
+        state.filters[columnIdx] = [];
+    }
+    
+    // Check if value already exists (case-insensitive)
+    const lowerValue = value.toLowerCase();
+    if (state.filters[columnIdx].some(v => v.toLowerCase() === lowerValue)) {
+        input.value = '';
+        return;
+    }
+    
+    // Add value to filter array
+    state.filters[columnIdx].push(value);
+    
+    // Clear input
+    input.value = '';
+    
+    // Update UI and apply filters
+    renderFilterTags(columnIdx);
+    applyFiltersAndSort();
+}
+
+function removeFilter(columnIdx, valueIndex) {
+    if (state.filters[columnIdx]) {
+        state.filters[columnIdx].splice(valueIndex, 1);
+        
+        // Remove empty arrays
+        if (state.filters[columnIdx].length === 0) {
+            delete state.filters[columnIdx];
+        }
+        
+        renderFilterTags(columnIdx);
+        applyFiltersAndSort();
+    }
+}
+
+function renderFilterTags(columnIdx) {
+    const tagsContainer = document.getElementById(`filter-tags-${columnIdx}`);
+    if (!tagsContainer) return;
+    
+    const values = state.filters[columnIdx] || [];
+    
+    tagsContainer.innerHTML = values.map((value, idx) => `
+        <span class="filter-tag">
+            <span class="filter-tag-text">${escapeHtml(value)}</span>
+            <button class="filter-tag-remove" onclick="removeFilter(${columnIdx}, ${idx})">×</button>
+        </span>
+    `).join('');
+}
+
+function renderAllFilterTags() {
+    state.columns.forEach((_, idx) => {
+        renderFilterTags(idx);
+    });
+}
+
+function toggleSort(columnIdx) {
+    if (state.sortColumn === columnIdx) {
+        // Toggle direction or clear
+        if (state.sortDirection === 'asc') {
+            state.sortDirection = 'desc';
+        } else if (state.sortDirection === 'desc') {
+            state.sortColumn = null;
+            state.sortDirection = 'asc';
+        }
+    } else {
+        state.sortColumn = columnIdx;
+        state.sortDirection = 'asc';
+    }
+    
+    applyFiltersAndSort();
+    updateSortIcons();
+}
+
+function updateSortIcons() {
+    // Clear all sort icons
+    state.columns.forEach((_, idx) => {
+        const icon = document.getElementById(`sort-icon-${idx}`);
+        if (icon) {
+            icon.textContent = '';
+            icon.className = 'sort-icon';
+        }
+    });
+    
+    // Set active sort icon
+    if (state.sortColumn !== null) {
+        const icon = document.getElementById(`sort-icon-${state.sortColumn}`);
+        if (icon) {
+            icon.textContent = state.sortDirection === 'asc' ? '▲' : '▼';
+            icon.className = 'sort-icon active';
+        }
+    }
+}
+
+function applyFiltersAndSort() {
+    let data = [...state.fullData];
+    
+    // Apply filters
+    // Logic: AND between columns, OR within column values
+    const filterKeys = Object.keys(state.filters);
+    if (filterKeys.length > 0) {
+        data = data.filter(row => {
+            // For each column with filters (AND logic)
+            return filterKeys.every(colIdx => {
+                const filterValues = state.filters[colIdx];
+                const cellValue = String(row[colIdx] ?? '').toLowerCase();
+                
+                // Check if cell matches ANY of the filter values (OR logic)
+                return filterValues.some(filterVal => 
+                    cellValue.includes(filterVal.toLowerCase())
+                );
+            });
+        });
+    }
+    
+    // Apply sort
+    if (state.sortColumn !== null) {
+        data.sort((a, b) => {
+            let valA = a[state.sortColumn];
+            let valB = b[state.sortColumn];
+            
+            // Handle nulls
+            if (valA === null || valA === undefined) valA = '';
+            if (valB === null || valB === undefined) valB = '';
+            
+            // Try numeric comparison
+            const numA = parseFloat(valA);
+            const numB = parseFloat(valB);
+            
+            if (!isNaN(numA) && !isNaN(numB)) {
+                return state.sortDirection === 'asc' ? numA - numB : numB - numA;
+            }
+            
+            // String comparison
+            const strA = String(valA).toLowerCase();
+            const strB = String(valB).toLowerCase();
+            
+            if (state.sortDirection === 'asc') {
+                return strA.localeCompare(strB);
+            } else {
+                return strB.localeCompare(strA);
+            }
+        });
+    }
+    
+    state.filteredData = data;
+    renderTableBody(data);
+    updateRowDisplayCount();
+    updateFilterStatus();
+}
+
+function updateRowDisplayCount() {
+    const total = state.fullData.length;
+    const filtered = state.filteredData.length;
+    const displayed = Math.min(filtered, DISPLAY_LIMIT);
+    
+    // Count total filter values
+    const filterCount = Object.values(state.filters).reduce((sum, arr) => sum + arr.length, 0);
+    
+    if (filterCount > 0) {
+        if (filtered > DISPLAY_LIMIT) {
+            elements.rowDisplayCount.textContent = `Showing ${displayed.toLocaleString()} of ${filtered.toLocaleString()} matches (${total.toLocaleString()} total)`;
+        } else {
+            elements.rowDisplayCount.textContent = `Showing ${filtered.toLocaleString()} matches of ${total.toLocaleString()} total`;
+        }
+    } else {
+        if (total > DISPLAY_LIMIT) {
+            elements.rowDisplayCount.textContent = `Showing first ${displayed.toLocaleString()} of ${total.toLocaleString()} rows`;
+        } else {
+            elements.rowDisplayCount.textContent = `Showing all ${total.toLocaleString()} rows`;
+        }
+    }
+}
+
+function updateFilterStatus() {
+    // Count total filter values across all columns
+    const filterCount = Object.values(state.filters).reduce((sum, arr) => sum + arr.length, 0);
+    
+    if (filterCount > 0) {
+        elements.filterStatus.textContent = `${filterCount} filter${filterCount > 1 ? 's' : ''} active`;
+        elements.filterStatus.style.display = 'inline';
+        elements.clearFiltersBtn.style.display = 'flex';
+    } else {
+        elements.filterStatus.style.display = 'none';
+        elements.clearFiltersBtn.style.display = 'none';
+    }
+}
+
+function clearAllFilters() {
+    state.filters = {};
+    state.sortColumn = null;
+    state.sortDirection = 'asc';
+    
+    // Clear all filter inputs and tags
+    state.columns.forEach((_, idx) => {
+        const input = document.getElementById(`filter-input-${idx}`);
+        if (input) input.value = '';
+        renderFilterTags(idx);
+    });
+    
+    applyFiltersAndSort();
+    updateSortIcons();
+}
+
+// Expose to global scope for onclick handlers
+window.toggleSort = toggleSort;
+window.handleFilterKeydown = handleFilterKeydown;
+window.addFilterFromInput = addFilterFromInput;
+window.removeFilter = removeFilter;
+
 function formatCell(value) {
     if (value === null || value === undefined) {
         return '<span style="color: var(--text-muted)">null</span>';
     }
     if (typeof value === 'number') {
-        return Number.isInteger(value) ? value : value.toFixed(4);
+        return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(4);
     }
     return escapeHtml(String(value));
 }
+
+// ============================
+// Columns Grid
+// ============================
 
 function renderColumnsGrid(columns) {
     elements.columnsGrid.innerHTML = columns.map((col, index) => `
@@ -784,6 +1097,21 @@ function setupCustomBuilder(columns) {
     elements.llmSuggestBtn.addEventListener('click', getLLMSuggestion);
     elements.generateCustomBtn.addEventListener('click', generateCustomPlot);
     
+    // Reset button
+    if (elements.resetBuilderBtn) {
+        elements.resetBuilderBtn.addEventListener('click', resetCustomBuilder);
+    }
+    
+    // Show All button under plot
+    if (elements.showAllBtn) {
+        elements.showAllBtn.addEventListener('click', () => {
+            if (elements.showAllToggle) {
+                elements.showAllToggle.checked = true;
+            }
+            generateCustomPlot();
+        });
+    }
+    
     // Show/hide options based on plot type
     document.querySelectorAll('input[name="plot-type"]').forEach(radio => {
         radio.addEventListener('change', updatePlotOptions);
@@ -800,6 +1128,66 @@ function setupCustomBuilder(columns) {
     
     // Update aggregation visibility based on Y column selection
     elements.yAxisSelect?.addEventListener('change', updateAggregationVisibility);
+}
+
+function resetCustomBuilder() {
+    // Reset dropdowns
+    if (elements.xAxisSelect) elements.xAxisSelect.value = '';
+    if (elements.yAxisSelect) elements.yAxisSelect.value = '';
+    if (elements.colorAxisSelect) elements.colorAxisSelect.value = '';
+    if (elements.aggregationSelect) elements.aggregationSelect.value = '';
+    
+    // Uncheck all plot types
+    document.querySelectorAll('input[name="plot-type"]').forEach(radio => {
+        radio.checked = false;
+    });
+    
+    // Reset options
+    if (elements.binCountInput) elements.binCountInput.value = '20';
+    if (elements.showAllToggle) elements.showAllToggle.checked = false;
+    if (elements.xMinInput) elements.xMinInput.value = '';
+    if (elements.xMaxInput) elements.xMaxInput.value = '';
+    if (elements.yMinInput) elements.yMinInput.value = '';
+    if (elements.yMaxInput) elements.yMaxInput.value = '';
+    if (elements.xTickInput) elements.xTickInput.value = '';
+    if (elements.yTickInput) elements.yTickInput.value = '';
+    if (elements.markerSizeInput) {
+        elements.markerSizeInput.value = '8';
+        elements.markerSizeValue.textContent = '8';
+    }
+    if (elements.opacityInput) {
+        elements.opacityInput.value = '70';
+        elements.opacityValue.textContent = '70%';
+    }
+    if (elements.scaleTypeInput) elements.scaleTypeInput.value = 'linear';
+    if (elements.gridToggle) elements.gridToggle.checked = true;
+    if (elements.customTitleInput) elements.customTitleInput.value = '';
+    
+    // Hide options section
+    if (elements.plotOptionsSection) elements.plotOptionsSection.style.display = 'none';
+    
+    // Hide AI suggestion
+    if (elements.aiSuggestionBox) elements.aiSuggestionBox.classList.add('hidden');
+    
+    // Reset plot area
+    if (elements.customPlotArea) {
+        elements.customPlotArea.innerHTML = `
+            <div class="plot-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                    <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+                <p>Select columns and plot type, then click Generate</p>
+            </div>
+        `;
+    }
+    
+    // Hide category info
+    if (elements.categoryInfo) {
+        elements.categoryInfo.classList.add('hidden');
+    }
+    
+    // Clear state
+    state.lastPlotResult = null;
 }
 
 function updateAggregationVisibility() {
@@ -829,6 +1217,13 @@ function updatePlotOptions() {
         binOption.style.display = selectedType === 'histogram' ? 'flex' : 'none';
     }
     
+    // Show/hide show all option for categorical plots
+    const showAllOption = document.getElementById('show-all-option');
+    const categoricalPlots = ['bar', 'grouped_bar', 'stacked_bar', 'heatmap_cat', 'box_grouped', 'line', 'pie'];
+    if (showAllOption) {
+        showAllOption.style.display = categoricalPlots.includes(selectedType) ? 'flex' : 'none';
+    }
+    
     // Show/hide marker size for scatter plots
     const markerOption = document.getElementById('marker-size-option');
     if (markerOption) {
@@ -856,6 +1251,7 @@ function getPlotOptions() {
     return {
         binCount: parseInt(elements.binCountInput?.value) || 20,
         aggregation: elements.aggregationSelect?.value || null,
+        showAll: elements.showAllToggle?.checked || false,
         xRange: {
             min: elements.xMinInput?.value ? parseFloat(elements.xMinInput.value) : null,
             max: elements.xMaxInput?.value ? parseFloat(elements.xMaxInput.value) : null
@@ -1005,6 +1401,7 @@ async function generateCustomPlot() {
         }
         
         const plotData = await response.json();
+        state.lastPlotResult = plotData;
         
         // Check if it's a word cloud image
         if (plotData.is_image && plotData.image_base64) {
@@ -1016,6 +1413,7 @@ async function generateCustomPlot() {
                          style="max-width: 100%; height: auto; border-radius: 8px;">
                 </div>
             `;
+            elements.categoryInfo.classList.add('hidden');
             return;
         }
         
@@ -1079,9 +1477,31 @@ async function generateCustomPlot() {
             return trace;
         });
         
-        // Render the plot
-        elements.customPlotArea.innerHTML = '<div id="custom-plot-render" style="width: 100%; height: 500px;"></div>';
-        Plotly.newPlot('custom-plot-render', customData, customLayout, PLOTLY_CONFIG);
+        // Create scrollable container if chart is wide
+        const chartWidth = customLayout.width || 800;
+        const containerHtml = chartWidth > 900 
+            ? `<div class="plot-scroll-container"><div id="custom-plot-render" style="width: ${chartWidth}px; height: 500px;"></div></div>`
+            : `<div id="custom-plot-render" style="width: 100%; height: 500px;"></div>`;
+        
+        elements.customPlotArea.innerHTML = containerHtml;
+        
+        // Set responsive false if we have a custom width
+        const plotConfig = { ...PLOTLY_CONFIG };
+        if (chartWidth > 900) {
+            plotConfig.responsive = false;
+        }
+        
+        Plotly.newPlot('custom-plot-render', customData, customLayout, plotConfig);
+        
+        // Show category info if applicable
+        if (plotData.total_categories && plotData.showing_categories && 
+            plotData.total_categories > plotData.showing_categories) {
+            elements.categoryInfoText.textContent = 
+                `Showing ${plotData.showing_categories} of ${plotData.total_categories} categories`;
+            elements.categoryInfo.classList.remove('hidden');
+        } else {
+            elements.categoryInfo.classList.add('hidden');
+        }
         
     } catch (error) {
         console.error('Generate error:', error);
@@ -1132,9 +1552,15 @@ function clearPreviousResults() {
     state.columns = [];
     state.selectedPlotColumn = null;
     state.customSelectedColumns = [];
+    state.fullData = [];
+    state.filteredData = [];
+    state.filters = {};
+    state.sortColumn = null;
+    state.sortDirection = 'asc';
+    state.lastPlotResult = null;
     
     // Clear results UI
-    if (elements.summaryText) elements.summaryText.textContent = '';
+    if (elements.summaryList) elements.summaryList.innerHTML = '';
     if (elements.insightsList) elements.insightsList.innerHTML = '';
     if (elements.limitationsList) elements.limitationsList.innerHTML = '';
     
@@ -1156,43 +1582,8 @@ function clearPreviousResults() {
         elements.plotsDisplay.classList.remove('active');
     }
     
-    // Clear custom plot builder dropdowns
-    if (elements.xAxisSelect) {
-        elements.xAxisSelect.innerHTML = '<option value="">-- Select column --</option>';
-    }
-    if (elements.yAxisSelect) {
-        elements.yAxisSelect.innerHTML = '<option value="">-- None --</option>';
-    }
-    if (elements.colorAxisSelect) {
-        elements.colorAxisSelect.innerHTML = '<option value="">-- None --</option>';
-    }
-    if (elements.aggregationSelect) {
-        elements.aggregationSelect.innerHTML = AGGREGATION_FUNCTIONS.map(agg => 
-            `<option value="${agg.value}">${agg.label}</option>`
-        ).join('');
-    }
-    
-    // Reset plot options
-    if (elements.plotOptionsSection) elements.plotOptionsSection.style.display = 'none';
-    if (elements.aiSuggestionBox) elements.aiSuggestionBox.classList.add('hidden');
-    if (elements.aiSuggestionText) elements.aiSuggestionText.textContent = '';
-    
-    // Reset custom plot area
-    if (elements.customPlotArea) {
-        elements.customPlotArea.innerHTML = `
-            <div class="plot-placeholder">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-                    <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-                </svg>
-                <p>Select columns and plot type, then click Generate</p>
-            </div>
-        `;
-    }
-    
-    // Uncheck all plot type radios
-    document.querySelectorAll('input[name="plot-type"]').forEach(radio => {
-        radio.checked = false;
-    });
+    // Reset custom builder
+    resetCustomBuilder();
     
     // Reset tabs to first tab
     elements.tabBtns.forEach(btn => btn.classList.remove('active'));
@@ -1268,6 +1659,11 @@ function init() {
         resetAppState();
         showScreen('upload-screen');
     });
+    
+    // Clear filters button
+    if (elements.clearFiltersBtn) {
+        elements.clearFiltersBtn.addEventListener('click', clearAllFilters);
+    }
     
     // Tabs
     setupTabs();
